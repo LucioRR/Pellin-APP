@@ -67,11 +67,37 @@ export default function Configuracion() {
   const toggleNeg = (id) => setUsuForm(f => ({ ...f, negocio_ids: f.negocio_ids.includes(id) ? f.negocio_ids.filter(x => x !== id) : [...f.negocio_ids, id] }))
   const toggleMod = (id) => setUsuForm(f => ({ ...f, modulos: f.modulos.includes(id) ? f.modulos.filter(x => x !== id) : [...f.modulos, id] }))
   const saveUsu = async () => {
+    // Protección: no podés cambiar tu propio rol ni quitarte el módulo de configuración
+    const esPropio = usuModal.id === usuario.id
+    if (esPropio && usuForm.rol !== 'admin') {
+      toast('No podés cambiar tu propio rol de administrador', 'warn')
+      return
+    }
+    if (esPropio && !usuForm.negocio_ids.length) {
+      toast('No podés quitarte el acceso a todos los negocios', 'warn')
+      return
+    }
+    // Protección: debe quedar al menos un admin en el sistema
+    if (usuForm.rol !== 'admin') {
+      const otrosAdmins = usuarios.filter(u => u.id !== usuModal.id && u.rol === 'admin')
+      if (otrosAdmins.length === 0) {
+        toast('Debe haber al menos un administrador en el sistema', 'warn')
+        return
+      }
+    }
+    // Si es admin, siempre guardar con todos los módulos (el rol define el acceso)
+    const modulosFinales = usuForm.rol === 'admin'
+      ? MODULOS.map(m => m.id)
+      : usuForm.modulos
     setSaving(true)
-    const { error } = await supabase.from('usuarios').update({ rol: usuForm.rol, negocio_ids: usuForm.negocio_ids, modulos: usuForm.modulos }).eq('id', usuModal.id)
-    if (error) { toast('Error', 'err'); setSaving(false); return }
+    const { error } = await supabase.from('usuarios').update({
+      rol: usuForm.rol,
+      negocio_ids: usuForm.negocio_ids,
+      modulos: modulosFinales,
+    }).eq('id', usuModal.id)
+    if (error) { toast('Error al guardar', 'err'); setSaving(false); return }
     toast('Usuario actualizado', 'ok')
-    if (usuModal.id === usuario.id) recargarUsuario()
+    if (esPropio) recargarUsuario()
     setUsuModal(null); setSaving(false); cargar()
   }
   const desactivarUsu = async (u) => {
@@ -216,17 +242,23 @@ export default function Configuracion() {
       {usuModal && (
         <Modal title={`Editar — ${usuModal.nombre}`} onClose={() => setUsuModal(null)}>
           <FG label="Rol">
-            <div style={{ display: 'flex', gap: 8 }}>
-              {['admin', 'operario'].map(r => (
-                <button key={r} onClick={() => setUsuForm(f => ({ ...f, rol: r }))} style={{
-                  flex: 1, padding: '9px', borderRadius: 8, fontFamily: 'inherit',
-                  border: `2px solid ${usuForm.rol === r ? '#2D6A4F' : 'var(--border)'}`,
-                  background: usuForm.rol === r ? '#EAF7EF' : 'transparent',
-                  cursor: 'pointer', fontWeight: 600, fontSize: 13,
-                  color: usuForm.rol === r ? '#2D6A4F' : 'var(--muted)',
-                }}>{r.charAt(0).toUpperCase() + r.slice(1)}</button>
-              ))}
-            </div>
+            {usuModal.id === usuario.id ? (
+              <div style={{ padding: '9px 12px', borderRadius: 8, background: '#F0EBE1', border: '1px solid var(--border)', fontSize: 13, color: 'var(--muted)' }}>
+                Administrador — no podés cambiar tu propio rol
+              </div>
+            ) : (
+              <div style={{ display: 'flex', gap: 8 }}>
+                {['admin', 'operario'].map(r => (
+                  <button key={r} onClick={() => setUsuForm(f => ({ ...f, rol: r }))} style={{
+                    flex: 1, padding: '9px', borderRadius: 8, fontFamily: 'inherit',
+                    border: `2px solid ${usuForm.rol === r ? '#2D6A4F' : 'var(--border)'}`,
+                    background: usuForm.rol === r ? '#EAF7EF' : 'transparent',
+                    cursor: 'pointer', fontWeight: 600, fontSize: 13,
+                    color: usuForm.rol === r ? '#2D6A4F' : 'var(--muted)',
+                  }}>{r.charAt(0).toUpperCase() + r.slice(1)}</button>
+                ))}
+              </div>
+            )}
           </FG>
           <FG label="Negocios con acceso">
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
