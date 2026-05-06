@@ -4,6 +4,7 @@ import { useNegocio, acciones } from '../lib/negocio'
 import { useToast } from '../contexts/ToastContext'
 import { useAuth } from '../contexts/AuthContext'
 import { PageHeader, Card, Btn, BtnSm, Badge, Modal, AnularModal, FG, Grid2, Grid3, Inp, Sel, MRow, Spinner, TH, TD, EmptyRow, InfoBox, Ic } from '../components/UI'
+import SearchableSelect from '../components/SearchableSelect'
 
 export default function Compras() {
   const { negocioId } = useNegocio()
@@ -182,10 +183,12 @@ export default function Compras() {
               <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: 8, marginBottom: 8, alignItems: 'flex-end' }}>
                 <div>
                   {i === 0 && <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4 }}>Ingrediente</div>}
-                  <Sel value={it.mpId} onChange={e => updateItem(i, 'mpId', e.target.value)}>
-                    <option value="">— Seleccionar —</option>
-                    {materias.map(m => <option key={m.id} value={m.id}>{m.nombre} ({m.unidad})</option>)}
-                  </Sel>
+                  <SearchableSelect
+                    options={materias.map(m => ({ value: m.id, label: m.nombre, sub: `${m.unidad} · Precio actual: $${m.precio_costo}` }))}
+                    value={it.mpId}
+                    onChange={val => updateItem(i, 'mpId', val)}
+                    placeholder="Buscar ingrediente..."
+                  />
                 </div>
                 <div>
                   {i === 0 && <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4 }}>Cantidad</div>}
