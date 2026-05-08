@@ -203,7 +203,8 @@ export default function Remitos() {
 
       // Actualizar secuencia
       await supabase.from('remito_secuencia')
-        .upsert({ negocio_id: negocioId, ultimo: nuevoNum })
+        .update({ ultimo: nuevoNum })
+        .eq('negocio_id', negocioId)
 
       // Por cada ítem: descontar stock + crear salida vinculada al remito
       for (const it of items) {
