@@ -29,7 +29,7 @@ export default function Productos() {
     setCargando(true)
     const [{ data: ps }, { data: ss }, { data: rs }] = await Promise.all([
       supabase.from('productos_terminados').select('*, receta:receta_id(nombre)').eq('negocio_id', negocioId).eq('activo', true).order('nombre'),
-      supabase.from('salidas_produccion').select('*, creadoPor:creado_por(nombre), anuladoPor:anulado_por(nombre)').eq('negocio_id', negocioId).order('fecha', { ascending: false }),
+      supabase.from('salidas_produccion').select('*').eq('negocio_id', negocioId).order('fecha', { ascending: false }),
       supabase.from('recetas').select('id,nombre').eq('negocio_id', negocioId).eq('activo', true).order('nombre'),
     ])
     setProductos(ps || [])
@@ -143,7 +143,7 @@ export default function Productos() {
       {tab === 'salidas' && (
         <Card>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr><TH>Fecha</TH><TH>Producto</TH><TH>Cantidad</TH><TH>Notas</TH><TH>Usuario</TH><TH>Estado</TH><TH></TH></tr></thead>
+            <thead><tr><TH>Fecha</TH><TH>Producto</TH><TH>Cantidad</TH><TH>Notas</TH><TH>Notas / Remito</TH><TH>Estado</TH><TH></TH></tr></thead>
             <tbody>
               {salidas.length === 0 && <EmptyRow cols={7} msg="Sin salidas registradas" />}
               {salidas.map(s => (
@@ -152,7 +152,7 @@ export default function Productos() {
                   <TD bold>{s.producto_nombre}</TD>
                   <TD>{s.cantidad} {s.unidad}</TD>
                   <TD sm color="var(--muted)">{s.notas || '—'}</TD>
-                  <TD sm color="var(--muted)">{s.creadoPor?.nombre || '—'}</TD>
+                  <TD sm color="var(--muted)">{s.notas || '—'}</TD>
                   <TD>
                     {s.anulada
                       ? <Badge type="gray">Anulada</Badge>
