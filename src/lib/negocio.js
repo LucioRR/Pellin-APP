@@ -374,3 +374,304 @@ export const acciones = {
     }
   },
 }
+// ─────────────────────────────────────────────
+// PEDIDOS MAYORISTAS
+// ─────────────────────────────────────────────
+
+/**
+ * Obtiene pedidos del negocio activo con sus ítems y productos.
+ * Filtros opcionales: estado, fechaDesde, fechaHasta (sobre fecha_entrega).
+ */
+export async function getPedidos(negocioId, { estado, fechaDesde, fechaHasta } = {}) {
+  let query = supabase
+    .from('pedidos')
+    .select(`
+      id, cliente_nombre, fecha_pedido, fecha_entrega,
+      estado, notas, remito_id, created_at,
+      pedido_items (
+        id, cantidad_pedida, cantidad_despachada, producto_id,
+        productos_terminados ( id, nombre )
+      )
+    `)
+    .eq('negocio_id', negocioId)
+    .eq('anulado', false)
+    .order('fecha_entrega', { ascending: true, nullsFirst: false })
+    .order('created_at', { ascending: true });
+
+  if (estado && estado !== 'todos') query = query.eq('estado', estado);
+  if (fechaDesde) query = query.gte('fecha_entrega', fechaDesde);
+  if (fechaHasta) query = query.lte('fecha_entrega', fechaHasta);
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return data || [];
+}
+
+/**
+ * Crea un pedido mayorista con sus ítems.
+ * items: [{ productoId, cantidad }]
+ */
+export async function createPedido(negocioId, { clienteNombre, fechaEntrega, notas, items }, userId) {
+  const { data: pedido, error: pedidoError } = await supabase
+    .from('pedidos')
+    .insert({
+      negocio_id: negocioId,
+      cliente_nombre: clienteNombre.trim(),
+      fecha_entrega: fechaEntrega || null,
+      notas: notas?.trim() || null,
+      estado: 'recibido',
+      created_by: userId,
+    })
+    .select()
+    .single();
+
+  if (pedidoError) throw pedidoError;
+
+  if (items?.length > 0) {
+    const { error: itemsError } = await supabase
+      .from('pedido_items')
+      .insert(
+        items.map((item) => ({
+          pedido_id: pedido.id,
+          producto_id: item.productoId,
+          cantidad_pedida: Number(item.cantidad),
+          cantidad_despachada: 0,
+        }))
+      );
+    if (itemsError) throw itemsError;
+  }
+
+  return pedido;
+}
+
+/**
+ * Avanza el estado de un pedido.
+ * No usar directamente para 'despachado' — usar despacharPedido().
+ */
+export async function updateEstadoPedido(pedidoId, nuevoEstado) {
+  const { data, error } = await supabase
+    .from('pedidos')
+    .update({ estado: nuevoEstado })
+    .eq('id', pedidoId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+/**
+ * Verifica stock disponible para un array de ítems.
+ *
+ * items: [{ productoId, cantidad_pedida, nombre? }]
+ *
+ * Retorna el mismo array enriquecido con:
+ *   { stockDisponible, estado: 'verde' | 'amarillo' | 'rojo' }
+ *
+ * Verde   = stockDisponible >= cantidad_pedida
+ * Amarillo = 0 < stockDisponible < cantidad_pedida
+ * Rojo    = stockDisponible === 0
+ */
+export async function checkStockPedido(negocioId, items) {
+  if (!items?.length) return [];
+
+  const results = await Promise.all(
+    items.map(async (item) => {
+      const productoId = item.productoId;
+
+      // Todos los lotes vigentes para este producto
+      // Nota: si tu tabla lotes no tiene negocio_id, quitá ese filtro.
+      const { data: lotes, error: lotesError } = await supabase
+        .from('lotes')
+        .select('id, cantidad_producida')
+        .eq('producto_id', productoId)
+        .eq('negocio_id', negocioId)
+        .eq('anulado', false);
+
+      if (lotesError) throw lotesError;
+
+      if (!lotes?.length) {
+        return { ...item, stockDisponible: 0, estado: 'rojo' };
+      }
+
+      const loteIds = lotes.map((l) => l.id);
+
+      // Salidas ya registradas contra esos lotes
+      const { data: salidas, error: salidasError } = await supabase
+        .from('salidas_produccion')
+        .select('cantidad')
+        .in('lote_id', loteIds)
+        .eq('anulado', false);
+
+      if (salidasError) throw salidasError;
+
+      const totalProducido = lotes.reduce((s, l) => s + (Number(l.cantidad_producida) || 0), 0);
+      const totalSalidas   = (salidas || []).reduce((s, r) => s + (Number(r.cantidad) || 0), 0);
+      const stockDisponible = Math.max(0, totalProducido - totalSalidas);
+      const cantidadPedida  = Number(item.cantidad_pedida);
+
+      const estado =
+        stockDisponible >= cantidadPedida ? 'verde' :
+        stockDisponible > 0              ? 'amarillo' :
+                                           'rojo';
+
+      return { ...item, stockDisponible, estado };
+    })
+  );
+
+  return results;
+}
+
+/**
+ * Despacha un pedido:
+ *  1. Genera el remito con número correlativo (R-XXXX).
+ *  2. Crea remito_items por cada ítem del pedido.
+ *  3. Descuenta stock PT usando FIFO (lote más antiguo primero).
+ *  4. Crea registros en salidas_produccion con el remito_id.
+ *  5. Actualiza cantidad_despachada en pedido_items.
+ *  6. Actualiza pedido: estado = 'despachado', remito_id.
+ *
+ * Retorna { remito, numeroFormateado }
+ */
+export async function despacharPedido(pedidoId, negocioId, userId) {
+  // ── 1. Cargar pedido con ítems ──────────────────────────────
+  const { data: pedido, error: pedidoError } = await supabase
+    .from('pedidos')
+    .select(`
+      *,
+      pedido_items (
+        id, producto_id, cantidad_pedida,
+        productos_terminados ( nombre )
+      )
+    `)
+    .eq('id', pedidoId)
+    .single();
+
+  if (pedidoError) throw pedidoError;
+  if (!pedido) throw new Error('Pedido no encontrado');
+
+  // ── 2. Número correlativo de remito ─────────────────────────
+  // Intenta obtener la fila de secuencia; si no existe la crea.
+  let { data: secRow, error: secError } = await supabase
+    .from('remito_secuencia')
+    .select('ultimo_numero')
+    .eq('negocio_id', negocioId)
+    .maybeSingle();
+
+  if (secError) throw secError;
+
+  let ultimoNumero = secRow?.ultimo_numero || 0;
+  const nuevoNumero = ultimoNumero + 1;
+
+  if (secRow) {
+    const { error: updSecError } = await supabase
+      .from('remito_secuencia')
+      .update({ ultimo_numero: nuevoNumero })
+      .eq('negocio_id', negocioId);
+    if (updSecError) throw updSecError;
+  } else {
+    const { error: insSecError } = await supabase
+      .from('remito_secuencia')
+      .insert({ negocio_id: negocioId, ultimo_numero: nuevoNumero });
+    if (insSecError) throw insSecError;
+  }
+
+  const numeroFormateado = `R-${String(nuevoNumero).padStart(4, '0')}`;
+
+  // ── 3. Crear remito ─────────────────────────────────────────
+  const { data: remito, error: remitoError } = await supabase
+    .from('remitos')
+    .insert({
+      negocio_id:   negocioId,
+      numero:       numeroFormateado,
+      fecha:        new Date().toISOString().split('T')[0],
+      destinatario: pedido.cliente_nombre,
+      created_by:   userId,
+    })
+    .select()
+    .single();
+
+  if (remitoError) throw remitoError;
+
+  // ── 4. Procesar cada ítem: remito_item + salidas FIFO ───────
+  for (const item of pedido.pedido_items) {
+    // 4a. remito_item
+    const { error: riError } = await supabase
+      .from('remito_items')
+      .insert({
+        remito_id:  remito.id,
+        producto_id: item.producto_id,
+        cantidad:   item.cantidad_pedida,
+      });
+    if (riError) throw riError;
+
+    // 4b. Lotes ordenados por fecha de elaboración (FIFO)
+    const { data: lotes, error: lotesError } = await supabase
+      .from('lotes')
+      .select('id, cantidad_producida')
+      .eq('producto_id', item.producto_id)
+      .eq('negocio_id', negocioId)
+      .eq('anulado', false)
+      .order('creado_en', { ascending: true });
+
+    if (lotesError) throw lotesError;
+
+    if (!lotes?.length) continue; // sin stock — el remito queda registrado igual
+
+    // 4c. Salidas previas por lote
+    const loteIds = lotes.map((l) => l.id);
+    const { data: prevSalidas } = await supabase
+      .from('salidas_produccion')
+      .select('lote_id, cantidad')
+      .in('lote_id', loteIds)
+      .eq('anulado', false);
+
+    const salidasByLote = {};
+    (prevSalidas || []).forEach((s) => {
+      salidasByLote[s.lote_id] = (salidasByLote[s.lote_id] || 0) + Number(s.cantidad);
+    });
+
+    // 4d. Descontar en orden FIFO
+    let cantRestante = Number(item.cantidad_pedida);
+    let cantDespachada = 0;
+
+    for (const lote of lotes) {
+      if (cantRestante <= 0) break;
+      const disponibleEnLote =
+        Number(lote.cantidad_producida) - (salidasByLote[lote.id] || 0);
+      if (disponibleEnLote <= 0) continue;
+
+      const cantEste = Math.min(cantRestante, disponibleEnLote);
+
+      const { error: salidaError } = await supabase
+        .from('salidas_produccion')
+        .insert({
+          lote_id:    lote.id,
+          remito_id:  remito.id,
+          cantidad:   cantEste,
+          negocio_id: negocioId,
+          created_by: userId,
+        });
+      if (salidaError) throw salidaError;
+
+      cantRestante   -= cantEste;
+      cantDespachada += cantEste;
+    }
+
+    // 4e. Actualizar cantidad_despachada en pedido_item
+    await supabase
+      .from('pedido_items')
+      .update({ cantidad_despachada: cantDespachada })
+      .eq('id', item.id);
+  }
+
+  // ── 5. Cerrar pedido ────────────────────────────────────────
+  const { error: closePedidoError } = await supabase
+    .from('pedidos')
+    .update({ estado: 'despachado', remito_id: remito.id })
+    .eq('id', pedidoId);
+
+  if (closePedidoError) throw closePedidoError;
+
+  return { remito, numeroFormateado };
+}

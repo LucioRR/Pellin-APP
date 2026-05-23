@@ -13,6 +13,7 @@ import Remitos        from './Remitos'
 import Caja           from './Caja'
 import Estadisticas   from './Estadisticas'
 import Configuracion  from './Configuracion'
+import Pedidos        from './pages/Pedidos'
 
 const NAV = [
   { id:'dashboard',    label:'Panel',           icon:'dash',   path:'/' },
@@ -21,6 +22,7 @@ const NAV = [
   { id:'compras',      label:'Compras',         icon:'cart',   path:'/compras' },
   { id:'produccion',   label:'Producción',      icon:'flask',  path:'/produccion' },
   { id:'productos',    label:'Prod. Terminados',icon:'pkg',    path:'/productos' },
+  { path: 'pedidos', label: 'Pedidos', icon: '📦' },
   { id:'remitos',      label:'Remitos',         icon:'arrow',  path:'/remitos' },
   { id:'caja',         label:'Caja',            icon:'wallet', path:'/caja' },
   { id:'estadisticas', label:'Estadísticas',    icon:'chart',  path:'/estadisticas' },
@@ -152,6 +154,7 @@ export default function AppShell() {
               <Route path="/caja"          element={<Caja />} />
               <Route path="/estadisticas"  element={<Estadisticas />} />
               <Route path="/configuracion" element={<Configuracion />} />
+              <Route path="pedidos"        element={<Pedidos />} />
             </Routes>
           </div>
         )}

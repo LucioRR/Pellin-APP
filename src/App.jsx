@@ -2,6 +2,7 @@ import { useAuth } from './contexts/AuthContext'
 import Login from './pages/Login'
 import AppShell from './pages/AppShell'
 import { Spinner } from './components/UI'
+import Pedidos from './pages/Pedidos'
 
 export default function App() {
   const { session, cargando } = useAuth()
