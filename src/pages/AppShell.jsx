@@ -13,6 +13,7 @@ import Remitos        from './Remitos'
 import Caja           from './Caja'
 import Estadisticas   from './Estadisticas'
 import Configuracion  from './Configuracion'
+import Pedidos        from './Pedidos'
 
 
 const NAV = [
@@ -23,6 +24,7 @@ const NAV = [
   { id:'produccion',   label:'Producción',      icon:'flask',  path:'/produccion' },
   { id:'productos',    label:'Prod. Terminados',icon:'pkg',    path:'/productos' },
   { id:'remitos',      label:'Remitos',         icon:'arrow',  path:'/remitos' },
+  { id:'pedidos', label:'Pedidos',         icon:'arrow',  path:'/pedidos' },
   { id:'caja',         label:'Caja',            icon:'wallet', path:'/caja' },
   { id:'estadisticas', label:'Estadísticas',    icon:'chart',  path:'/estadisticas' },
   { id:'configuracion',label:'Configuración',   icon:'cog',    path:'/configuracion' },
