@@ -379,32 +379,31 @@ export const acciones = {
 // ─────────────────────────────────────────────
 
 /**
- * Obtiene pedidos del negocio activo con sus ítems y productos.
- * Filtros opcionales: estado, fechaDesde, fechaHasta (sobre fecha_entrega).
+ * Obtiene pedidos del negocio activo con sus ítems.
  */
 export async function getPedidos(negocioId, { estado, fechaDesde, fechaHasta } = {}) {
   let query = supabase
     .from('pedidos')
     .select(`
       id, cliente_nombre, fecha_pedido, fecha_entrega,
-      estado, notas, remito_id, created_at,
+      estado, notas, remito_id, creado_en,
       pedido_items (
         id, cantidad_pedida, cantidad_despachada, producto_id,
-        productos_terminados ( id, nombre )
+        productos_terminados ( id, nombre, unidad )
       )
     `)
     .eq('negocio_id', negocioId)
     .eq('anulado', false)
     .order('fecha_entrega', { ascending: true, nullsFirst: false })
-    .order('created_at', { ascending: true });
+    .order('creado_en',     { ascending: true })
 
-  if (estado && estado !== 'todos') query = query.eq('estado', estado);
-  if (fechaDesde) query = query.gte('fecha_entrega', fechaDesde);
-  if (fechaHasta) query = query.lte('fecha_entrega', fechaHasta);
+  if (estado && estado !== 'todos') query = query.eq('estado', estado)
+  if (fechaDesde) query = query.gte('fecha_entrega', fechaDesde)
+  if (fechaHasta) query = query.lte('fecha_entrega', fechaHasta)
 
-  const { data, error } = await query;
-  if (error) throw error;
-  return data || [];
+  const { data, error } = await query
+  if (error) throw error
+  return data || []
 }
 
 /**
@@ -415,38 +414,38 @@ export async function createPedido(negocioId, { clienteNombre, fechaEntrega, not
   const { data: pedido, error: pedidoError } = await supabase
     .from('pedidos')
     .insert({
-      negocio_id: negocioId,
-      cliente_nombre: clienteNombre.trim(),
-      fecha_entrega: fechaEntrega || null,
-      notas: notas?.trim() || null,
-      estado: 'recibido',
-      created_by: userId,
+      negocio_id:      negocioId,
+      cliente_nombre:  clienteNombre.trim(),
+      fecha_entrega:   fechaEntrega || null,
+      notas:           notas?.trim() || null,
+      estado:          'recibido',
+      created_by:      userId,
     })
     .select()
-    .single();
+    .single()
 
-  if (pedidoError) throw pedidoError;
+  if (pedidoError) throw pedidoError
 
   if (items?.length > 0) {
     const { error: itemsError } = await supabase
       .from('pedido_items')
       .insert(
-        items.map((item) => ({
-          pedido_id: pedido.id,
-          producto_id: item.productoId,
-          cantidad_pedida: Number(item.cantidad),
+        items.map(item => ({
+          pedido_id:        pedido.id,
+          producto_id:      item.productoId,
+          cantidad_pedida:  Number(item.cantidad),
           cantidad_despachada: 0,
         }))
-      );
-    if (itemsError) throw itemsError;
+      )
+    if (itemsError) throw itemsError
   }
 
-  return pedido;
+  return pedido
 }
 
 /**
  * Avanza el estado de un pedido.
- * No usar directamente para 'despachado' — usar despacharPedido().
+ * No usar para 'despachado' — usar despacharPedido().
  */
 export async function updateEstadoPedido(pedidoId, nuevoEstado) {
   const { data, error } = await supabase
@@ -454,224 +453,189 @@ export async function updateEstadoPedido(pedidoId, nuevoEstado) {
     .update({ estado: nuevoEstado })
     .eq('id', pedidoId)
     .select()
-    .single();
+    .single()
 
-  if (error) throw error;
-  return data;
+  if (error) throw error
+  return data
 }
 
 /**
  * Verifica stock disponible para un array de ítems.
+ * Usa stock_actual de productos_terminados (campo mantenido por el sistema).
  *
  * items: [{ productoId, cantidad_pedida, nombre? }]
  *
- * Retorna el mismo array enriquecido con:
+ * Retorna el mismo array con:
  *   { stockDisponible, estado: 'verde' | 'amarillo' | 'rojo' }
  *
- * Verde   = stockDisponible >= cantidad_pedida
+ * Verde    = stockDisponible >= cantidad_pedida
  * Amarillo = 0 < stockDisponible < cantidad_pedida
- * Rojo    = stockDisponible === 0
+ * Rojo     = stockDisponible === 0
  */
 export async function checkStockPedido(negocioId, items) {
-  if (!items?.length) return [];
+  if (!items?.length) return []
 
   const results = await Promise.all(
-    items.map(async (item) => {
-      const productoId = item.productoId;
-
-      // Todos los lotes vigentes para este producto
-      // Nota: si tu tabla lotes no tiene negocio_id, quitá ese filtro.
-      const { data: lotes, error: lotesError } = await supabase
-        .from('lotes')
-        .select('id, cantidad_producida')
-        .eq('producto_id', productoId)
+    items.map(async item => {
+      const { data: pt, error } = await supabase
+        .from('productos_terminados')
+        .select('stock_actual')
+        .eq('id', item.productoId)
         .eq('negocio_id', negocioId)
-        .eq('anulado', false);
+        .single()
 
-      if (lotesError) throw lotesError;
-
-      if (!lotes?.length) {
-        return { ...item, stockDisponible: 0, estado: 'rojo' };
+      if (error || !pt) {
+        return { ...item, stockDisponible: 0, estado: 'rojo' }
       }
 
-      const loteIds = lotes.map((l) => l.id);
-
-      // Salidas ya registradas contra esos lotes
-      const { data: salidas, error: salidasError } = await supabase
-        .from('salidas_produccion')
-        .select('cantidad')
-        .in('lote_id', loteIds)
-        .eq('anulado', false);
-
-      if (salidasError) throw salidasError;
-
-      const totalProducido = lotes.reduce((s, l) => s + (Number(l.cantidad_producida) || 0), 0);
-      const totalSalidas   = (salidas || []).reduce((s, r) => s + (Number(r.cantidad) || 0), 0);
-      const stockDisponible = Math.max(0, totalProducido - totalSalidas);
-      const cantidadPedida  = Number(item.cantidad_pedida);
+      const stockDisponible = Math.max(0, Number(pt.stock_actual) || 0)
+      const cantidadPedida  = Number(item.cantidad_pedida)
 
       const estado =
         stockDisponible >= cantidadPedida ? 'verde' :
         stockDisponible > 0              ? 'amarillo' :
-                                           'rojo';
+                                           'rojo'
 
-      return { ...item, stockDisponible, estado };
+      return { ...item, stockDisponible, estado }
     })
-  );
+  )
 
-  return results;
+  return results
 }
 
 /**
- * Despacha un pedido:
- *  1. Genera el remito con número correlativo (R-XXXX).
- *  2. Crea remito_items por cada ítem del pedido.
- *  3. Descuenta stock PT usando FIFO (lote más antiguo primero).
- *  4. Crea registros en salidas_produccion con el remito_id.
- *  5. Actualiza cantidad_despachada en pedido_items.
- *  6. Actualiza pedido: estado = 'despachado', remito_id.
+ * Despacha un pedido generando el remito automáticamente.
  *
- * Retorna { remito, numeroFormateado }
+ * Flujo:
+ *  1. Carga el pedido con sus ítems y productos.
+ *  2. Obtiene/crea el número correlativo (remito_secuencia).
+ *  3. Inserta el remito.
+ *  4. Por cada ítem: inserta remito_item + salida_produccion + descuenta stock_actual.
+ *  5. Actualiza cantidad_despachada en pedido_items.
+ *  6. Cierra el pedido: estado = 'despachado', remito_id.
+ *
+ * ⚠ VERIFICAR antes de usar:
+ *   - Columnas de 'remitos': si tu tabla usa 'receptor' en vez de 'destinatario', ajustalo abajo.
+ *   - Columnas de 'remito_items': si no tiene 'producto_nombre' o 'unidad', quitarlos del insert.
+ *   - Si Remitos.jsx usa una lógica diferente para la secuencia, replicarla acá.
  */
 export async function despacharPedido(pedidoId, negocioId, userId) {
-  // ── 1. Cargar pedido con ítems ──────────────────────────────
+  // ── 1. Cargar pedido ──────────────────────────────────────────────────────
   const { data: pedido, error: pedidoError } = await supabase
     .from('pedidos')
     .select(`
-      *,
+      id, cliente_nombre,
       pedido_items (
         id, producto_id, cantidad_pedida,
-        productos_terminados ( nombre )
+        productos_terminados ( id, nombre, unidad, stock_actual )
       )
     `)
     .eq('id', pedidoId)
-    .single();
+    .single()
 
-  if (pedidoError) throw pedidoError;
-  if (!pedido) throw new Error('Pedido no encontrado');
+  if (pedidoError) throw pedidoError
+  if (!pedido)     throw new Error('Pedido no encontrado')
 
-  // ── 2. Número correlativo de remito ─────────────────────────
-  // Intenta obtener la fila de secuencia; si no existe la crea.
-  let { data: secRow, error: secError } = await supabase
+  // ── 2. Número correlativo ─────────────────────────────────────────────────
+  const { data: secRow } = await supabase
     .from('remito_secuencia')
     .select('ultimo_numero')
     .eq('negocio_id', negocioId)
-    .maybeSingle();
+    .maybeSingle()
 
-  if (secError) throw secError;
-
-  let ultimoNumero = secRow?.ultimo_numero || 0;
-  const nuevoNumero = ultimoNumero + 1;
+  const nuevoNumero    = (secRow?.ultimo_numero || 0) + 1
+  const numeroFormateado = `R-${String(nuevoNumero).padStart(4, '0')}`
 
   if (secRow) {
-    const { error: updSecError } = await supabase
+    const { error } = await supabase
       .from('remito_secuencia')
       .update({ ultimo_numero: nuevoNumero })
-      .eq('negocio_id', negocioId);
-    if (updSecError) throw updSecError;
+      .eq('negocio_id', negocioId)
+    if (error) throw error
   } else {
-    const { error: insSecError } = await supabase
+    const { error } = await supabase
       .from('remito_secuencia')
-      .insert({ negocio_id: negocioId, ultimo_numero: nuevoNumero });
-    if (insSecError) throw insSecError;
+      .insert({ negocio_id: negocioId, ultimo_numero: nuevoNumero })
+    if (error) throw error
   }
 
-  const numeroFormateado = `R-${String(nuevoNumero).padStart(4, '0')}`;
+  // ── 3. Crear remito ───────────────────────────────────────────────────────
+  // ⚠ Ajustar nombres de columna si difieren de tu tabla remitos real.
+  //   Abrí Remitos.jsx y buscá el .insert() para confirmar los campos.
+  const hoy = new Date().toISOString().split('T')[0]
 
-  // ── 3. Crear remito ─────────────────────────────────────────
   const { data: remito, error: remitoError } = await supabase
     .from('remitos')
     .insert({
       negocio_id:   negocioId,
       numero:       numeroFormateado,
-      fecha:        new Date().toISOString().split('T')[0],
-      destinatario: pedido.cliente_nombre,
-      created_by:   userId,
+      fecha:        hoy,
+      destino: pedido.cliente_nombre, // ← verificar nombre de columna
+      creado_por:   userId,
     })
     .select()
-    .single();
+    .single()
 
-  if (remitoError) throw remitoError;
+  if (remitoError) throw remitoError
 
-  // ── 4. Procesar cada ítem: remito_item + salidas FIFO ───────
+  // ── 4. Procesar cada ítem ─────────────────────────────────────────────────
   for (const item of pedido.pedido_items) {
+    const pt       = item.productos_terminados
+    const nombre   = pt?.nombre   || ''
+    const unidad   = pt?.unidad   || 'kg'
+    const cantidad = Number(item.cantidad_pedida)
+
     // 4a. remito_item
+    // ⚠ Ajustar si tu tabla remito_items no tiene producto_nombre o unidad
     const { error: riError } = await supabase
       .from('remito_items')
       .insert({
-        remito_id:  remito.id,
-        producto_id: item.producto_id,
-        cantidad:   item.cantidad_pedida,
-      });
-    if (riError) throw riError;
+        remito_id:       remito.id,
+        producto_id:     item.producto_id,
+        producto_nombre: nombre,
+        cantidad,
+        unidad,
+      })
+    if (riError) throw riError
 
-    // 4b. Lotes ordenados por fecha de elaboración (FIFO)
-    const { data: lotes, error: lotesError } = await supabase
-      .from('lotes')
-      .select('id, cantidad_producida')
-      .eq('producto_id', item.producto_id)
-      .eq('negocio_id', negocioId)
-      .eq('anulado', false)
-      .order('creado_en', { ascending: true });
-
-    if (lotesError) throw lotesError;
-
-    if (!lotes?.length) continue; // sin stock — el remito queda registrado igual
-
-    // 4c. Salidas previas por lote
-    const loteIds = lotes.map((l) => l.id);
-    const { data: prevSalidas } = await supabase
+    // 4b. salida_produccion (columnas confirmadas en schema.sql)
+    const { error: spError } = await supabase
       .from('salidas_produccion')
-      .select('lote_id, cantidad')
-      .in('lote_id', loteIds)
-      .eq('anulado', false);
+      .insert({
+        negocio_id:      negocioId,
+        producto_id:     item.producto_id,
+        producto_nombre: nombre,
+        fecha:           hoy,
+        cantidad,
+        unidad,
+        notas:           `Remito ${numeroFormateado} — ${pedido.cliente_nombre}`,
+        creado_por:      userId,
+        remito_id:       remito.id,
+      })
+    if (spError) throw spError
 
-    const salidasByLote = {};
-    (prevSalidas || []).forEach((s) => {
-      salidasByLote[s.lote_id] = (salidasByLote[s.lote_id] || 0) + Number(s.cantidad);
-    });
+    // 4c. Descontar stock_actual en productos_terminados
+    const stockActual = Number(pt?.stock_actual || 0)
+    const { error: stockError } = await supabase
+      .from('productos_terminados')
+      .update({ stock_actual: Math.max(0, stockActual - cantidad) })
+      .eq('id', item.producto_id)
+    if (stockError) throw stockError
 
-    // 4d. Descontar en orden FIFO
-    let cantRestante = Number(item.cantidad_pedida);
-    let cantDespachada = 0;
-
-    for (const lote of lotes) {
-      if (cantRestante <= 0) break;
-      const disponibleEnLote =
-        Number(lote.cantidad_producida) - (salidasByLote[lote.id] || 0);
-      if (disponibleEnLote <= 0) continue;
-
-      const cantEste = Math.min(cantRestante, disponibleEnLote);
-
-      const { error: salidaError } = await supabase
-        .from('salidas_produccion')
-        .insert({
-          lote_id:    lote.id,
-          remito_id:  remito.id,
-          cantidad:   cantEste,
-          negocio_id: negocioId,
-          created_by: userId,
-        });
-      if (salidaError) throw salidaError;
-
-      cantRestante   -= cantEste;
-      cantDespachada += cantEste;
-    }
-
-    // 4e. Actualizar cantidad_despachada en pedido_item
+    // 4d. Actualizar cantidad_despachada en pedido_item
     await supabase
       .from('pedido_items')
-      .update({ cantidad_despachada: cantDespachada })
-      .eq('id', item.id);
+      .update({ cantidad_despachada: cantidad })
+      .eq('id', item.id)
   }
 
-  // ── 5. Cerrar pedido ────────────────────────────────────────
+  // ── 5. Cerrar pedido ──────────────────────────────────────────────────────
   const { error: closePedidoError } = await supabase
     .from('pedidos')
     .update({ estado: 'despachado', remito_id: remito.id })
-    .eq('id', pedidoId);
+    .eq('id', pedidoId)
 
-  if (closePedidoError) throw closePedidoError;
+  if (closePedidoError) throw closePedidoError
 
-  return { remito, numeroFormateado };
+  return { remito, numeroFormateado }
 }

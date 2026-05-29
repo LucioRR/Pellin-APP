@@ -1,477 +1,412 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { useAuth } from '../contexts/AuthContext';
-import { useToast } from '../contexts/ToastContext';
-import { supabase, fFecha, fNum } from '../lib/supabase';
+import { useState, useEffect, useCallback } from 'react'
+import { useAuth }  from '../contexts/AuthContext'
+import { useToast } from '../contexts/ToastContext'
+import { supabase, fFecha, fNum } from '../lib/supabase'
 import {
-  getPedidos,
-  createPedido,
-  updateEstadoPedido,
-  checkStockPedido,
-  despacharPedido,
-} from '../lib/negocio';
-import SearchableSelect from '../components/SearchableSelect';
-import { Btn, Modal, Card, Badge, TH, TD } from '../components/UI';
+  getPedidos, createPedido, updateEstadoPedido,
+  checkStockPedido, despacharPedido,
+} from '../lib/negocio'
+import SearchableSelect from '../components/SearchableSelect'
+import {
+  Btn, BtnSm, Badge, Card, Modal,
+  TH, TD, EmptyRow, PageHeader,
+  FG, Inp, Sel, Textarea, Grid2,
+  Ic, Spinner, InfoBox, MRow,
+} from '../components/UI'
 
-// ─── Constantes de dominio ───────────────────────────────────────────────────
+// ── Constantes ────────────────────────────────────────────────────────────────
 
-const ESTADOS = ['recibido', 'confirmado', 'en_preparacion', 'despachado', 'cancelado'];
+const BADGE = {
+  recibido:       'gray',
+  confirmado:     'blue',
+  en_preparacion: 'warn',
+  despachado:     'ok',
+  cancelado:      'err',
+}
 
 const LABELS = {
-  recibido:      'Recibido',
-  confirmado:    'Confirmado',
-  en_preparacion:'En preparación',
-  despachado:    'Despachado',
-  cancelado:     'Cancelado',
-};
+  recibido:       'Recibido',
+  confirmado:     'Confirmado',
+  en_preparacion: 'En preparación',
+  despachado:     'Despachado',
+  cancelado:      'Cancelado',
+}
 
-// Colores para Badge — ajustar según los valores que acepta tu Badge en UI.jsx
-const COLORES = {
-  recibido:      'gray',
-  confirmado:    'blue',
-  en_preparacion:'yellow',
-  despachado:    'green',
-  cancelado:     'red',
-};
-
-// Flujo lineal de estados (no incluye 'despachado', que se maneja con despacharPedido)
+// Flujo de avance lineal de estados
 const SIGUIENTE = {
-  recibido:      'confirmado',
-  confirmado:    'en_preparacion',
-  en_preparacion: 'despachado', // dispara despacharPedido
-};
+  recibido:       'confirmado',
+  confirmado:     'en_preparacion',
+  en_preparacion: 'despachado',
+}
 
 const FORM_VACIO = {
   clienteNombre: '',
   fechaEntrega:  '',
   notas:         '',
   items: [{ productoId: '', productoNombre: '', cantidad: '' }],
-};
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function calcularEstadoGlobal(stockItems) {
-  if (!stockItems?.length) return 'verde';
-  if (stockItems.every((i) => i.estado === 'verde'))   return 'verde';
-  if (stockItems.some((i)  => i.estado === 'rojo'))    return 'rojo';
-  return 'amarillo';
 }
 
-// ─── Sub-componentes ─────────────────────────────────────────────────────────
+// ── Semáforo de stock ─────────────────────────────────────────────────────────
 
 function Semaforo({ estado }) {
-  if (!estado) return <span className="text-gray-300 text-lg leading-none">·</span>;
-  const cfg = {
-    verde:    { cls: 'bg-green-500',  title: 'Stock suficiente' },
-    amarillo: { cls: 'bg-yellow-400', title: 'Stock parcial'    },
-    rojo:     { cls: 'bg-red-500',    title: 'Sin stock'        },
-  };
-  const { cls, title } = cfg[estado] || cfg.rojo;
+  if (!estado) return <span style={{ color: '#D8D2C7', fontSize: 18 }}>·</span>
+  const COLOR = { verde: '#1A7A3E', amarillo: '#9A6200', rojo: '#BF3030' }
+  const TITLE = { verde: 'Stock suficiente', amarillo: 'Stock parcial', rojo: 'Sin stock' }
   return (
     <span
-      className={`inline-block w-3 h-3 rounded-full ${cls} ring-2 ring-white`}
-      title={title}
+      title={TITLE[estado]}
+      style={{
+        display: 'inline-block', width: 10, height: 10,
+        borderRadius: '50%', background: COLOR[estado] || '#ccc', flexShrink: 0,
+      }}
     />
-  );
+  )
 }
 
-function FilaItem({ label, children }) {
+// ── Modal: Crear Pedido ───────────────────────────────────────────────────────
+
+function ModalCrear({ productos, loading, onClose, onSubmit }) {
+  const [form, setForm] = useState(FORM_VACIO)
+  const hoy = new Date().toISOString().split('T')[0]
+
+  const setField = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  const setItem = (idx, field, val) => setForm(f => {
+    const items = [...f.items]
+    if (field === 'productoId') {
+      const opt = productos.find(p => p.value === val)
+      items[idx] = { ...items[idx], productoId: val, productoNombre: opt?.label || '' }
+    } else {
+      items[idx] = { ...items[idx], [field]: val }
+    }
+    return { ...f, items }
+  })
+
+  const addItem    = () => setForm(f => ({ ...f, items: [...f.items, { productoId: '', productoNombre: '', cantidad: '' }] }))
+  const removeItem = (idx) => setForm(f => ({ ...f, items: f.items.filter((_, i) => i !== idx) }))
+
   return (
-    <div className="flex items-start justify-between gap-4 py-2 border-b last:border-0">
-      <span className="text-sm text-gray-600">{label}</span>
-      <span className="text-sm text-right">{children}</span>
-    </div>
-  );
+    <Modal title="Nuevo Pedido Mayorista" onClose={onClose} wide>
+      <Grid2>
+        <FG label="Cliente" required>
+          <Inp
+            value={form.clienteNombre}
+            onChange={e => setField('clienteNombre', e.target.value)}
+            placeholder="Nombre del cliente"
+          />
+        </FG>
+        <FG label="Fecha de entrega">
+          <Inp
+            type="date"
+            value={form.fechaEntrega}
+            onChange={e => setField('fechaEntrega', e.target.value)}
+            min={hoy}
+          />
+        </FG>
+      </Grid2>
+
+      <FG label="Productos" required>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {form.items.map((item, idx) => (
+            <div key={idx} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+              <div style={{ flex: 1 }}>
+                <SearchableSelect
+                  options={productos}
+                  value={item.productoId}
+                  onChange={v => setItem(idx, 'productoId', v)}
+                  placeholder="Buscar producto..."
+                />
+              </div>
+              <Inp
+                type="number" min="0.1" step="0.5"
+                value={item.cantidad}
+                onChange={e => setItem(idx, 'cantidad', e.target.value)}
+                placeholder="Cant."
+                style={{ width: 90 }}
+              />
+              {form.items.length > 1 && (
+                <button
+                  onClick={() => removeItem(idx)}
+                  style={{
+                    background: 'none', border: 'none', cursor: 'pointer',
+                    color: '#BF3030', padding: '8px 4px', fontSize: 20, lineHeight: 1,
+                  }}
+                >×</button>
+              )}
+            </div>
+          ))}
+        </div>
+        <button
+          onClick={addItem}
+          style={{
+            marginTop: 8, background: 'none', border: 'none', cursor: 'pointer',
+            color: '#2D6A4F', fontSize: 13, fontWeight: 600,
+            padding: 0, fontFamily: 'inherit',
+          }}
+        >
+          + Agregar producto
+        </button>
+      </FG>
+
+      <FG label="Notas / Observaciones">
+        <Textarea
+          value={form.notas}
+          onChange={e => setField('notas', e.target.value)}
+          placeholder="Turno de entrega, aclaraciones, etc."
+          rows={2}
+        />
+      </FG>
+
+      <MRow>
+        <Btn v="ghost" onClick={onClose}>Cancelar</Btn>
+        <Btn v="primary" loading={loading} onClick={() => onSubmit(form)}>
+          Crear Pedido
+        </Btn>
+      </MRow>
+    </Modal>
+  )
 }
 
-// ─── Modal Detalle / Acciones ─────────────────────────────────────────────────
+// ── Modal: Detalle / Gestión ──────────────────────────────────────────────────
 
-function ModalDetalle({
-  pedido, stockInfo, loadingAccion,
-  onClose, onAvanzar, onCancelar, onCrearOrden,
-}) {
-  const siguiente = SIGUIENTE[pedido.estado];
-  const esDespachar = siguiente === 'despachado';
-  const hayFaltante = stockInfo?.global === 'rojo' || stockInfo?.global === 'amarillo';
-  const yaTerminado = pedido.estado === 'despachado' || pedido.estado === 'cancelado';
-  const hoy = new Date().toISOString().split('T')[0];
-  const vencido =
-    pedido.fecha_entrega &&
-    pedido.fecha_entrega < hoy &&
-    !yaTerminado;
+function ModalDetalle({ pedido, stockInfo, loading, onClose, onAvanzar, onCancelar, onCrearOrden }) {
+  const siguiente   = SIGUIENTE[pedido.estado]
+  const esDespachar = siguiente === 'despachado'
+  const yaTerminado = pedido.estado === 'despachado' || pedido.estado === 'cancelado'
+  const hayFaltante = stockInfo?.global === 'rojo' || stockInfo?.global === 'amarillo'
+  const hoy     = new Date().toISOString().split('T')[0]
+  const vencido = pedido.fecha_entrega && pedido.fecha_entrega < hoy && !yaTerminado
 
   return (
-    <Modal open onClose={onClose} title={`Pedido — ${pedido.cliente_nombre}`}>
-      <div className="space-y-5">
-        {/* Cabecera info */}
-        <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm">
+    <Modal title={`Pedido — ${pedido.cliente_nombre}`} onClose={onClose} wide>
+
+      {/* Cabecera info */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 20px', marginBottom: 16, fontSize: 13 }}>
+        <span>
+          <span style={{ color: '#6C6659' }}>Estado: </span>
+          <Badge type={BADGE[pedido.estado]}>{LABELS[pedido.estado]}</Badge>
+        </span>
+        <span>
+          <span style={{ color: '#6C6659' }}>Pedido: </span>
+          {fFecha(pedido.fecha_pedido)}
+        </span>
+        {pedido.fecha_entrega && (
           <span>
-            <span className="text-gray-500 mr-1">Estado:</span>
-            <Badge color={COLORES[pedido.estado]}>{LABELS[pedido.estado]}</Badge>
-          </span>
-          <span>
-            <span className="text-gray-500 mr-1">Pedido el:</span>
-            {fFecha(pedido.fecha_pedido)}
-          </span>
-          {pedido.fecha_entrega && (
-            <span>
-              <span className="text-gray-500 mr-1">Entrega:</span>
-              <span className={vencido ? 'text-red-600 font-semibold' : ''}>
-                {fFecha(pedido.fecha_entrega)}
-                {vencido && ' ⚠ VENCIDO'}
-              </span>
+            <span style={{ color: '#6C6659' }}>Entrega: </span>
+            <span style={{ color: vencido ? '#BF3030' : 'inherit', fontWeight: vencido ? 700 : 400 }}>
+              {fFecha(pedido.fecha_entrega)}{vencido ? ' ⚠ VENCIDO' : ''}
             </span>
-          )}
-          {pedido.remito_id && (
-            <span className="text-green-700 font-medium">✓ Remito generado</span>
-          )}
-        </div>
-
-        {pedido.notas && (
-          <p className="text-sm text-gray-500 italic bg-gray-50 rounded px-3 py-2">
-            "{pedido.notas}"
-          </p>
+          </span>
         )}
+        {pedido.remito_id && (
+          <span style={{ color: '#1A7A3E', fontWeight: 600 }}>✓ Remito generado</span>
+        )}
+      </div>
 
-        {/* Tabla de productos */}
-        <div>
-          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">
-            Productos
-          </p>
-          <div className="rounded border divide-y">
-            {(pedido.pedido_items || []).map((item) => {
-              const si = stockInfo?.items?.find(
-                (x) => x.productoId === (item.productos_terminados?.id || item.producto_id)
-              );
-              return (
-                <div
-                  key={item.id}
-                  className="flex items-center justify-between px-3 py-2 text-sm gap-2"
-                >
-                  <span className="font-medium flex-1">
-                    {item.productos_terminados?.nombre || '—'}
-                  </span>
-                  <span className="text-gray-500">
-                    ×&nbsp;{fNum(item.cantidad_pedida)}
-                  </span>
-                  {si && !yaTerminado && (
-                    <span
-                      className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                        si.estado === 'verde'
-                          ? 'bg-green-100 text-green-700'
-                          : si.estado === 'amarillo'
-                          ? 'bg-yellow-100 text-yellow-700'
-                          : 'bg-red-100 text-red-700'
-                      }`}
-                    >
-                      Stock: {fNum(si.stockDisponible)}
-                    </span>
-                  )}
-                  {pedido.estado === 'despachado' && (
-                    <span className="text-xs text-gray-400">
-                      Despachado: {fNum(item.cantidad_despachada)}
-                    </span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+      {pedido.notas && (
+        <div style={{
+          background: '#F3EEE5', borderRadius: 8, padding: '8px 14px',
+          fontSize: 13, color: '#6C6659', marginBottom: 16, fontStyle: 'italic',
+        }}>
+          "{pedido.notas}"
         </div>
+      )}
 
-        {/* Alerta de stock + botón orden de producción */}
-        {hayFaltante && !yaTerminado && (
-          <div className="flex items-center justify-between gap-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
-            <p className="text-sm text-amber-800">
+      {/* Tabla de productos */}
+      <div style={{ marginBottom: 16 }}>
+        <div style={{
+          fontSize: 10, fontWeight: 700, color: '#6C6659',
+          textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6,
+        }}>
+          Productos
+        </div>
+        <Card>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                <TH>Producto</TH>
+                <TH right>Pedido</TH>
+                {!yaTerminado && <TH right>Stock disp.</TH>}
+                {pedido.estado === 'despachado' && <TH right>Despachado</TH>}
+              </tr>
+            </thead>
+            <tbody>
+              {(pedido.pedido_items || []).map(item => {
+                const si = stockInfo?.items?.find(
+                  x => x.productoId === (item.productos_terminados?.id || item.producto_id)
+                )
+                return (
+                  <tr key={item.id}>
+                    <TD>{item.productos_terminados?.nombre || '—'}</TD>
+                    <TD right bold>{fNum(item.cantidad_pedida)}</TD>
+                    {!yaTerminado && (
+                      <TD right>
+                        {si ? (
+                          <span style={{
+                            fontSize: 12, fontWeight: 600, padding: '2px 8px', borderRadius: 12,
+                            background: si.estado === 'verde' ? '#EAF7EF' : si.estado === 'amarillo' ? '#FEF3E2' : '#FDECEA',
+                            color:      si.estado === 'verde' ? '#1A7A3E' : si.estado === 'amarillo' ? '#9A6200'  : '#BF3030',
+                          }}>
+                            {fNum(si.stockDisponible)}
+                          </span>
+                        ) : <span style={{ color: '#D8D2C7' }}>—</span>}
+                      </TD>
+                    )}
+                    {pedido.estado === 'despachado' && (
+                      <TD right sm color="#6C6659">{fNum(item.cantidad_despachada)}</TD>
+                    )}
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </Card>
+      </div>
+
+      {/* Alerta de stock + botón Crear Orden */}
+      {hayFaltante && !yaTerminado && (
+        <InfoBox type={stockInfo.global === 'rojo' ? 'err' : 'warn'}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <span>
               {stockInfo.global === 'rojo'
-                ? '🔴 Sin stock para algunos ítems.'
+                ? '🔴 Sin stock suficiente para uno o más ítems.'
                 : '🟡 Stock parcial en algunos ítems.'}
-            </p>
-            <Btn size="sm" variant="secondary" onClick={onCrearOrden}>
+            </span>
+            <BtnSm v="ghost" onClick={onCrearOrden}>
               📋 Crear Orden de Producción
-            </Btn>
+            </BtnSm>
           </div>
-        )}
+        </InfoBox>
+      )}
 
-        {/* Barra de acciones de estado */}
-        {!yaTerminado && (
-          <div className="flex flex-wrap gap-2 pt-3 border-t">
+      {/* Acciones de estado */}
+      {!yaTerminado && (
+        <div style={{ borderTop: '1px solid #D8D2C7', paddingTop: 16, marginTop: 4 }}>
+          <MRow>
+            <Btn v="danger" onClick={onCancelar} loading={loading}>
+              <Ic n="ban" s={14} c="#fff" /> Cancelar pedido
+            </Btn>
             {siguiente && (
-              <Btn
-                onClick={onAvanzar}
-                loading={loadingAccion}
-                className={
-                  esDespachar
-                    ? 'bg-green-600 hover:bg-green-700 text-white'
-                    : undefined
-                }
-              >
+              <Btn v={esDespachar ? 'success' : 'primary'} onClick={onAvanzar} loading={loading}>
                 {esDespachar
-                  ? '🚚 Despachar y generar Remito'
+                  ? <><Ic n="arrow" s={14} c="#fff" /> Despachar y generar Remito</>
                   : `✓ Marcar como ${LABELS[siguiente]}`}
               </Btn>
             )}
-            <Btn variant="danger" onClick={onCancelar} loading={loadingAccion}>
-              Cancelar pedido
-            </Btn>
-          </div>
-        )}
-
-        <div className="flex justify-end">
-          <Btn variant="secondary" onClick={onClose}>
-            Cerrar
-          </Btn>
+          </MRow>
         </div>
-      </div>
+      )}
+
+      {yaTerminado && (
+        <MRow><Btn v="ghost" onClick={onClose}>Cerrar</Btn></MRow>
+      )}
     </Modal>
-  );
+  )
 }
 
-// ─── Modal Crear Pedido ───────────────────────────────────────────────────────
-
-function ModalCrear({ productos, loadingAccion, onClose, onSubmit }) {
-  const [form, setForm] = useState(FORM_VACIO);
-
-  const setField = (field, val) => setForm((f) => ({ ...f, [field]: val }));
-
-  const setItem = (idx, field, val) =>
-    setForm((f) => {
-      const items = [...f.items];
-      if (field === 'productoId') {
-        const opt = productos.find((p) => p.value === val);
-        items[idx] = { ...items[idx], productoId: val, productoNombre: opt?.label || '' };
-      } else {
-        items[idx] = { ...items[idx], [field]: val };
-      }
-      return { ...f, items };
-    });
-
-  const addItem = () =>
-    setForm((f) => ({
-      ...f,
-      items: [...f.items, { productoId: '', productoNombre: '', cantidad: '' }],
-    }));
-
-  const removeItem = (idx) =>
-    setForm((f) => ({ ...f, items: f.items.filter((_, i) => i !== idx) }));
-
-  const hoy = new Date().toISOString().split('T')[0];
-
-  return (
-    <Modal open onClose={onClose} title="Nuevo Pedido Mayorista">
-      <div className="space-y-5">
-        {/* Fila 1: cliente + fecha */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Cliente <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="text"
-              value={form.clienteNombre}
-              onChange={(e) => setField('clienteNombre', e.target.value)}
-              placeholder="Nombre del cliente"
-              className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Fecha de entrega
-            </label>
-            <input
-              type="date"
-              value={form.fechaEntrega}
-              onChange={(e) => setField('fechaEntrega', e.target.value)}
-              min={hoy}
-              className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-        </div>
-
-        {/* Items */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Productos <span className="text-red-500">*</span>
-          </label>
-          <div className="space-y-2">
-            {form.items.map((item, idx) => (
-              <div key={idx} className="flex gap-2 items-start">
-                <div className="flex-1 min-w-0">
-                  <SearchableSelect
-                    options={productos}
-                    value={item.productoId}
-                    onChange={(v) => setItem(idx, 'productoId', v)}
-                    placeholder="Buscar producto..."
-                  />
-                </div>
-                <input
-                  type="number"
-                  min="0.1"
-                  step="0.5"
-                  value={item.cantidad}
-                  onChange={(e) => setItem(idx, 'cantidad', e.target.value)}
-                  placeholder="Cant."
-                  className="w-24 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                {form.items.length > 1 && (
-                  <button
-                    onClick={() => removeItem(idx)}
-                    className="text-gray-400 hover:text-red-500 transition-colors px-1 py-2 text-lg leading-none"
-                    title="Quitar"
-                  >
-                    ×
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-          <button
-            onClick={addItem}
-            className="mt-2 text-sm text-blue-600 hover:text-blue-800 hover:underline"
-          >
-            + Agregar producto
-          </button>
-        </div>
-
-        {/* Notas */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            Notas / Observaciones
-          </label>
-          <textarea
-            value={form.notas}
-            onChange={(e) => setField('notas', e.target.value)}
-            placeholder="Turno de entrega, aclaraciones, etc."
-            rows={2}
-            className="w-full border rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-        </div>
-
-        <div className="flex justify-end gap-2 pt-1 border-t">
-          <Btn variant="secondary" onClick={onClose}>
-            Cancelar
-          </Btn>
-          <Btn
-            loading={loadingAccion}
-            onClick={() => onSubmit(form)}
-          >
-            Crear Pedido
-          </Btn>
-        </div>
-      </div>
-    </Modal>
-  );
-}
-
-// ─── Componente principal ─────────────────────────────────────────────────────
+// ── Componente principal ──────────────────────────────────────────────────────
 
 export default function Pedidos() {
-  const { usuario, negocioActivo, tieneAcceso } = useAuth();
-  const { showToast } = useToast();
+  const { usuario, negocioActivo, tieneAcceso } = useAuth()
+  const { showToast } = useToast()
 
-  // Lista
-  const [pedidos,  setPedidos]  = useState([]);
-  const [loading,  setLoading]  = useState(true);
-  const [stockMap, setStockMap] = useState({}); // pedidoId → { global, items }
+  const [pedidos,       setPedidos]       = useState([])
+  const [stockMap,      setStockMap]      = useState({})
+  const [loading,       setLoading]       = useState(true)
+  const [loadingAccion, setLoadingAccion] = useState(false)
+  const [productos,     setProductos]     = useState([])
 
-  // Filtros
-  const [filtroEstado,     setFiltroEstado]     = useState('todos');
-  const [filtroFechaDesde, setFiltroFechaDesde] = useState('');
-  const [filtroFechaHasta, setFiltroFechaHasta] = useState('');
+  const [filtroEstado,     setFiltroEstado]     = useState('todos')
+  const [filtroFechaDesde, setFiltroFechaDesde] = useState('')
+  const [filtroFechaHasta, setFiltroFechaHasta] = useState('')
+  const [vista,            setVista]            = useState('lista') // 'lista' | 'agenda'
 
-  // Vista
-  const [vista, setVista] = useState('lista'); // 'lista' | 'agenda'
+  const [modalCrear,    setModalCrear]    = useState(false)
+  const [pedidoDetalle, setPedidoDetalle] = useState(null)
 
-  // Modals
-  const [modalCrear,     setModalCrear]     = useState(false);
-  const [pedidoDetalle,  setPedidoDetalle]  = useState(null);
-  const [loadingAccion,  setLoadingAccion]  = useState(false);
-
-  // Productos para SearchableSelect
-  const [productos, setProductos] = useState([]);
-
-  // ── Permisos ────────────────────────────────────────────────
+  // ── Acceso ────────────────────────────────────────────────────────────────
   if (!tieneAcceso('pedidos')) {
     return (
-      <div className="flex items-center justify-center min-h-[40vh] text-gray-400">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '60vh', color: '#6C6659', fontSize: 15 }}>
         No tenés acceso a este módulo.
       </div>
-    );
+    )
   }
 
-  // ── Cargar productos disponibles ────────────────────────────
+  // ── Cargar productos ──────────────────────────────────────────────────────
   useEffect(() => {
-    if (!negocioActivo?.id) return;
+    if (!negocioActivo?.id) return
     supabase
       .from('productos_terminados')
       .select('id, nombre')
       .eq('negocio_id', negocioActivo.id)
       .eq('activo', true)
       .order('nombre')
-      .then(({ data, error }) => {
-        if (error) return;
-        setProductos((data || []).map((p) => ({ value: p.id, label: p.nombre })));
-      });
-  }, [negocioActivo?.id]);
+      .then(({ data }) =>
+        setProductos((data || []).map(p => ({ value: p.id, label: p.nombre })))
+      )
+  }, [negocioActivo?.id])
 
-  // ── Cargar pedidos + stock ──────────────────────────────────
+  // ── Cargar pedidos ────────────────────────────────────────────────────────
   const cargarPedidos = useCallback(async () => {
-    if (!negocioActivo?.id) return;
-    setLoading(true);
+    if (!negocioActivo?.id) return
+    setLoading(true)
     try {
       const data = await getPedidos(negocioActivo.id, {
         estado:     filtroEstado,
         fechaDesde: filtroFechaDesde,
         fechaHasta: filtroFechaHasta,
-      });
-      setPedidos(data);
+      })
+      setPedidos(data)
 
-      // Verificar stock solo para pedidos activos
-      const pendientes = data.filter(
-        (p) => p.estado !== 'despachado' && p.estado !== 'cancelado'
-      );
+      // Stock check independiente — si falla no bloquea la lista
+      const pendientes = data.filter(p => !['despachado', 'cancelado'].includes(p.estado))
+      const nuevoMap   = {}
 
-      const nuevoMap = {};
-      await Promise.all(
-        pendientes.map(async (pedido) => {
-          if (!pedido.pedido_items?.length) {
-            nuevoMap[pedido.id] = { global: 'verde', items: [] };
-            return;
-          }
-          const stockItems = await checkStockPedido(
-            negocioActivo.id,
-            pedido.pedido_items.map((item) => ({
+      await Promise.allSettled(
+        pendientes.map(async pedido => {
+          try {
+            if (!pedido.pedido_items?.length) {
+              nuevoMap[pedido.id] = { global: 'verde', items: [] }
+              return
+            }
+            const itemsCheck = pedido.pedido_items.map(item => ({
               productoId:      item.productos_terminados?.id || item.producto_id,
               cantidad_pedida: item.cantidad_pedida,
               nombre:          item.productos_terminados?.nombre,
             }))
-          );
-          nuevoMap[pedido.id] = {
-            global: calcularEstadoGlobal(stockItems),
-            items:  stockItems,
-          };
+            const stockItems = await checkStockPedido(negocioActivo.id, itemsCheck)
+            const todosVerdes = stockItems.every(i => i.estado === 'verde')
+            const algunoRojo  = stockItems.some(i  => i.estado === 'rojo')
+            nuevoMap[pedido.id] = {
+              global: todosVerdes ? 'verde' : algunoRojo ? 'rojo' : 'amarillo',
+              items:  stockItems,
+            }
+          } catch (_) {
+            // Si falla el stock de un pedido, no mostrar semáforo para ese
+          }
         })
-      );
-      setStockMap(nuevoMap);
+      )
+      setStockMap(nuevoMap)
     } catch (e) {
-      showToast('Error al cargar pedidos: ' + e.message, 'error');
+      showToast('Error al cargar pedidos: ' + e.message, 'error')
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  }, [negocioActivo?.id, filtroEstado, filtroFechaDesde, filtroFechaHasta]);
+  }, [negocioActivo?.id, filtroEstado, filtroFechaDesde, filtroFechaHasta])
 
-  useEffect(() => { cargarPedidos(); }, [cargarPedidos]);
+  useEffect(() => { cargarPedidos() }, [cargarPedidos])
 
-  // ── Handlers ────────────────────────────────────────────────
+  // ── Handlers ──────────────────────────────────────────────────────────────
 
-  async function handleCrearPedido(form) {
-    if (!form.clienteNombre.trim()) {
-      return showToast('Ingresá el nombre del cliente', 'error');
-    }
-    const itemsValidos = form.items.filter((i) => i.productoId && Number(i.cantidad) > 0);
-    if (!itemsValidos.length) {
-      return showToast('Agregá al menos un producto con cantidad', 'error');
-    }
+  async function handleCrear(form) {
+    if (!form.clienteNombre.trim())
+      return showToast('Ingresá el nombre del cliente', 'error')
+    const itemsValidos = form.items.filter(i => i.productoId && Number(i.cantidad) > 0)
+    if (!itemsValidos.length)
+      return showToast('Agregá al menos un producto con cantidad', 'error')
 
-    setLoadingAccion(true);
+    setLoadingAccion(true)
     try {
       await createPedido(
         negocioActivo.id,
@@ -479,436 +414,367 @@ export default function Pedidos() {
           clienteNombre: form.clienteNombre,
           fechaEntrega:  form.fechaEntrega || null,
           notas:         form.notas || null,
-          items: itemsValidos.map((i) => ({
-            productoId: i.productoId,
-            cantidad:   Number(i.cantidad),
-          })),
+          items: itemsValidos.map(i => ({ productoId: i.productoId, cantidad: Number(i.cantidad) })),
         },
         usuario.id
-      );
-      setModalCrear(false);
-      showToast('Pedido creado correctamente', 'success');
-      await cargarPedidos();
+      )
+      setModalCrear(false)
+      showToast('Pedido creado correctamente', 'success')
+      cargarPedidos()
     } catch (e) {
-      showToast('Error al crear pedido: ' + e.message, 'error');
+      showToast('Error al crear pedido: ' + e.message, 'error')
     } finally {
-      setLoadingAccion(false);
+      setLoadingAccion(false)
     }
   }
 
   async function handleAvanzar(pedido) {
-    const siguiente = SIGUIENTE[pedido.estado];
-    if (!siguiente) return;
+    const siguiente = SIGUIENTE[pedido.estado]
+    if (!siguiente) return
 
-    // Despachar con lógica especial
+    // ── Despachar ──────────────────────────────────────────────────────────
     if (siguiente === 'despachado') {
-      const stockInfo = stockMap[pedido.id];
-      if (stockInfo?.global !== 'verde') {
-        const ok = window.confirm(
-          'Hay ítems con stock insuficiente. ¿Querés despachar igualmente?\n' +
-          'El remito se generará con las cantidades pedidas.'
-        );
-        if (!ok) return;
+      const si = stockMap[pedido.id]
+      if (si && si.global !== 'verde') {
+        const ok = window.confirm('Hay ítems con stock insuficiente. ¿Despachar igualmente?')
+        if (!ok) return
       }
-      setLoadingAccion(true);
+      setLoadingAccion(true)
       try {
-        const { numeroFormateado } = await despacharPedido(
-          pedido.id, negocioActivo.id, usuario.id
-        );
-        showToast(`✓ Pedido despachado. Remito ${numeroFormateado} generado.`, 'success');
-        setPedidoDetalle(null);
-        await cargarPedidos();
+        const { numeroFormateado } = await despacharPedido(pedido.id, negocioActivo.id, usuario.id)
+        showToast(`✓ Pedido despachado. Remito ${numeroFormateado} generado.`, 'success')
+        setPedidoDetalle(null)
+        cargarPedidos()
       } catch (e) {
-        showToast('Error al despachar: ' + e.message, 'error');
+        showToast('Error al despachar: ' + e.message, 'error')
       } finally {
-        setLoadingAccion(false);
+        setLoadingAccion(false)
       }
-      return;
+      return
     }
 
-    // Avance normal de estado
-    setLoadingAccion(true);
+    // ── Avance normal ──────────────────────────────────────────────────────
+    setLoadingAccion(true)
     try {
-      await updateEstadoPedido(pedido.id, siguiente);
-      showToast(`Pedido actualizado: ${LABELS[siguiente]}`, 'success');
-      setPedidoDetalle((prev) => prev ? { ...prev, estado: siguiente } : null);
-      await cargarPedidos();
+      await updateEstadoPedido(pedido.id, siguiente)
+      showToast(`Pedido actualizado: ${LABELS[siguiente]}`, 'success')
+      setPedidoDetalle(null)
+      cargarPedidos()
     } catch (e) {
-      showToast('Error: ' + e.message, 'error');
+      showToast('Error: ' + e.message, 'error')
     } finally {
-      setLoadingAccion(false);
+      setLoadingAccion(false)
     }
   }
 
   async function handleCancelar(pedido) {
-    if (!window.confirm(`¿Cancelar el pedido de "${pedido.cliente_nombre}"?`)) return;
-    setLoadingAccion(true);
+    if (!window.confirm(`¿Cancelar el pedido de "${pedido.cliente_nombre}"?`)) return
+    setLoadingAccion(true)
     try {
-      await updateEstadoPedido(pedido.id, 'cancelado');
-      showToast('Pedido cancelado', 'success');
-      setPedidoDetalle(null);
-      await cargarPedidos();
+      await updateEstadoPedido(pedido.id, 'cancelado')
+      showToast('Pedido cancelado', 'success')
+      setPedidoDetalle(null)
+      cargarPedidos()
     } catch (e) {
-      showToast('Error: ' + e.message, 'error');
+      showToast('Error: ' + e.message, 'error')
     } finally {
-      setLoadingAccion(false);
+      setLoadingAccion(false)
     }
   }
 
-  function handleCrearOrden(pedido) {
-    // Placeholder — se implementará en Chat 3
-    showToast('Módulo Órdenes de Producción: disponible en la próxima versión (Chat 3)', 'info');
+  function handleCrearOrden() {
+    showToast('Módulo Órdenes de Producción disponible en Chat 3', 'info')
   }
 
-  function limpiarFiltros() {
-    setFiltroEstado('todos');
-    setFiltroFechaDesde('');
-    setFiltroFechaHasta('');
-  }
-
-  // ── Datos derivados ─────────────────────────────────────────
-  const hoy = new Date().toISOString().split('T')[0];
-
-  const pedidosHoy = pedidos.filter(
-    (p) =>
-      p.fecha_entrega === hoy &&
-      p.estado !== 'cancelado'
-  );
-  const urgentesHoy = pedidosHoy.filter((p) => p.estado !== 'despachado');
-
+  // ── Datos derivados ───────────────────────────────────────────────────────
+  const hoy            = new Date().toISOString().split('T')[0]
+  const pedidosHoy     = pedidos.filter(p => p.fecha_entrega === hoy && p.estado !== 'cancelado')
+  const urgentesHoy    = pedidosHoy.filter(p => p.estado !== 'despachado')
   const pedidosProximos = pedidos.filter(
-    (p) =>
-      p.fecha_entrega > hoy &&
-      p.estado !== 'cancelado' &&
-      p.estado !== 'despachado'
-  );
+    p => p.fecha_entrega > hoy && !['cancelado', 'despachado'].includes(p.estado)
+  )
 
-  // ── Render ───────────────────────────────────────────────────
-
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <div className="p-4 md:p-6 max-w-7xl mx-auto">
-      {/* ── Header ── */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-800">Pedidos Mayoristas</h1>
-          {urgentesHoy.length > 0 && (
-            <p className="mt-1 text-sm text-orange-600 font-medium">
-              ⚠ {urgentesHoy.length} pedido{urgentesHoy.length > 1 ? 's' : ''} para entregar hoy sin despachar
-            </p>
-          )}
-        </div>
-        <div className="flex gap-2">
-          <Btn
-            variant="secondary"
-            onClick={() => setVista((v) => (v === 'lista' ? 'agenda' : 'lista'))}
-          >
-            {vista === 'lista' ? '📅 Agenda del día' : '📋 Lista completa'}
-          </Btn>
-          <Btn onClick={() => setModalCrear(true)}>+ Nuevo Pedido</Btn>
-        </div>
-      </div>
+    <div>
+      <PageHeader
+        title="Pedidos Mayoristas"
+        sub={urgentesHoy.length > 0
+          ? `⚠ ${urgentesHoy.length} pedido${urgentesHoy.length > 1 ? 's' : ''} para hoy sin despachar`
+          : undefined}
+        action={
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Btn v="ghost" onClick={() => setVista(v => v === 'lista' ? 'agenda' : 'lista')}>
+              <Ic n={vista === 'lista' ? 'dash' : 'arrow'} s={13} c="#1A1A18" />
+              {vista === 'lista' ? 'Agenda del día' : 'Ver lista'}
+            </Btn>
+            <Btn v="primary" onClick={() => setModalCrear(true)}>
+              <Ic n="plus" s={13} c="#fff" /> Nuevo Pedido
+            </Btn>
+          </div>
+        }
+      />
 
-      {/* ════════════════════════════════
+      {/* ══════════════════════════════════════════
           VISTA: LISTA
-      ════════════════════════════════ */}
+      ══════════════════════════════════════════ */}
       {vista === 'lista' && (
         <>
           {/* Filtros */}
-          <Card className="mb-4 p-4">
-            <div className="flex flex-wrap gap-3 items-end">
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Estado</label>
-                <select
-                  value={filtroEstado}
-                  onChange={(e) => setFiltroEstado(e.target.value)}
-                  className="border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
+          <Card pad style={{ marginBottom: 18 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}>
+              <FG label="Estado" style={{ marginBottom: 0, minWidth: 160 }}>
+                <Sel value={filtroEstado} onChange={e => setFiltroEstado(e.target.value)}>
                   <option value="todos">Todos los estados</option>
-                  {ESTADOS.map((e) => (
-                    <option key={e} value={e}>{LABELS[e]}</option>
+                  {Object.entries(LABELS).map(([v, l]) => (
+                    <option key={v} value={v}>{l}</option>
                   ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Entrega desde</label>
-                <input
-                  type="date"
-                  value={filtroFechaDesde}
-                  onChange={(e) => setFiltroFechaDesde(e.target.value)}
-                  className="border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Entrega hasta</label>
-                <input
-                  type="date"
-                  value={filtroFechaHasta}
-                  onChange={(e) => setFiltroFechaHasta(e.target.value)}
-                  className="border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
+                </Sel>
+              </FG>
+              <FG label="Entrega desde" style={{ marginBottom: 0 }}>
+                <Inp type="date" value={filtroFechaDesde} onChange={e => setFiltroFechaDesde(e.target.value)} />
+              </FG>
+              <FG label="Entrega hasta" style={{ marginBottom: 0 }}>
+                <Inp type="date" value={filtroFechaHasta} onChange={e => setFiltroFechaHasta(e.target.value)} />
+              </FG>
               {(filtroEstado !== 'todos' || filtroFechaDesde || filtroFechaHasta) && (
-                <Btn variant="secondary" size="sm" onClick={limpiarFiltros}>
-                  ✕ Limpiar
+                <Btn v="ghost" onClick={() => {
+                  setFiltroEstado('todos')
+                  setFiltroFechaDesde('')
+                  setFiltroFechaHasta('')
+                }}>
+                  <Ic n="x" s={13} c="#1A1A18" /> Limpiar
                 </Btn>
               )}
             </div>
           </Card>
 
           {/* Tabla */}
-          {loading ? (
-            <p className="text-center text-gray-400 py-16">Cargando pedidos…</p>
-          ) : pedidos.length === 0 ? (
-            <p className="text-center text-gray-400 py-16">
-              No hay pedidos con los filtros seleccionados.
-            </p>
-          ) : (
-            <div className="overflow-x-auto rounded-xl border shadow-sm bg-white">
-              <table className="w-full text-sm">
-                <thead className="bg-gray-50 border-b">
-                  <tr>
-                    <TH className="w-10 text-center">Stock</TH>
-                    <TH>Cliente</TH>
-                    <TH className="hidden md:table-cell">Productos</TH>
-                    <TH>F. Entrega</TH>
-                    <TH>Estado</TH>
-                    <TH className="w-16"></TH>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pedidos.map((pedido) => {
-                    const esHoy    = pedido.fecha_entrega === hoy;
-                    const vencido  = pedido.fecha_entrega < hoy &&
-                                     !['despachado','cancelado'].includes(pedido.estado);
-                    const stockInfo = stockMap[pedido.id];
-                    const activo   = !['despachado','cancelado'].includes(pedido.estado);
-
-                    return (
-                      <tr
-                        key={pedido.id}
-                        className={[
-                          'border-t transition-colors',
-                          esHoy && activo ? 'bg-orange-50 hover:bg-orange-100' :
-                          vencido         ? 'bg-red-50   hover:bg-red-100'    :
-                                            'hover:bg-gray-50',
-                        ].join(' ')}
-                      >
-                        {/* Semáforo */}
-                        <TD className="text-center">
-                          {activo ? (
-                            <Semaforo estado={stockInfo?.global} />
-                          ) : (
-                            <span className="text-gray-300">—</span>
-                          )}
-                        </TD>
-
-                        {/* Cliente */}
-                        <TD>
-                          <span className="font-medium text-gray-800">
-                            {pedido.cliente_nombre}
-                          </span>
-                          {pedido.notas && (
-                            <span className="block text-xs text-gray-400 truncate max-w-[180px]">
-                              {pedido.notas}
-                            </span>
-                          )}
-                        </TD>
-
-                        {/* Productos (desktop) */}
-                        <TD className="hidden md:table-cell">
-                          {(pedido.pedido_items || []).map((item) => (
-                            <span key={item.id} className="block text-xs text-gray-600">
-                              {item.productos_terminados?.nombre} &times; {fNum(item.cantidad_pedida)}
-                            </span>
-                          ))}
-                        </TD>
-
-                        {/* Fecha entrega */}
-                        <TD>
-                          {pedido.fecha_entrega ? (
-                            <>
-                              <span className={vencido ? 'text-red-600 font-semibold' : ''}>
-                                {fFecha(pedido.fecha_entrega)}
-                              </span>
-                              {esHoy && (
-                                <span className="ml-1 text-xs font-bold text-orange-500">HOY</span>
-                              )}
-                              {vencido && (
-                                <span className="ml-1 text-xs font-bold text-red-500">VENCIDO</span>
-                              )}
-                            </>
-                          ) : (
-                            <span className="text-gray-300">—</span>
-                          )}
-                        </TD>
-
-                        {/* Estado */}
-                        <TD>
-                          <Badge color={COLORES[pedido.estado]}>
-                            {LABELS[pedido.estado]}
-                          </Badge>
-                        </TD>
-
-                        {/* Acción */}
-                        <TD>
-                          <Btn
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => setPedidoDetalle(pedido)}
-                          >
-                            Ver
-                          </Btn>
-                        </TD>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
+          {loading
+            ? <Spinner />
+            : (
+              <Card>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr>
+                      <TH>Stock</TH>
+                      <TH>Cliente</TH>
+                      <TH>Productos</TH>
+                      <TH>F. Entrega</TH>
+                      <TH>Estado</TH>
+                      <TH></TH>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pedidos.length === 0
+                      ? <EmptyRow cols={6} msg="No hay pedidos con esos filtros." />
+                      : pedidos.map(pedido => {
+                          const esHoy   = pedido.fecha_entrega === hoy
+                          const vencido = pedido.fecha_entrega < hoy &&
+                                          !['despachado', 'cancelado'].includes(pedido.estado)
+                          const activo  = !['despachado', 'cancelado'].includes(pedido.estado)
+                          const si      = stockMap[pedido.id]
+                          return (
+                            <tr
+                              key={pedido.id}
+                              style={{
+                                background: vencido        ? '#FFF5F5' :
+                                            esHoy && activo ? '#FFFBF0' : 'transparent',
+                              }}
+                            >
+                              <TD>
+                                <div style={{ display: 'flex', justifyContent: 'center' }}>
+                                  {activo
+                                    ? <Semaforo estado={si?.global} />
+                                    : <span style={{ color: '#D8D2C7' }}>—</span>}
+                                </div>
+                              </TD>
+                              <TD bold>
+                                {pedido.cliente_nombre}
+                                {pedido.notas && (
+                                  <div style={{
+                                    fontSize: 11, color: '#6C6659', fontWeight: 400,
+                                    maxWidth: 180, overflow: 'hidden',
+                                    textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                  }}>
+                                    {pedido.notas}
+                                  </div>
+                                )}
+                              </TD>
+                              <TD sm>
+                                {(pedido.pedido_items || []).map(item => (
+                                  <div key={item.id}>
+                                    {item.productos_terminados?.nombre} × {fNum(item.cantidad_pedida)}
+                                  </div>
+                                ))}
+                              </TD>
+                              <TD nowrap>
+                                {pedido.fecha_entrega ? (
+                                  <span style={{
+                                    color:      vencido ? '#BF3030' : 'inherit',
+                                    fontWeight: vencido ? 700 : 400,
+                                  }}>
+                                    {fFecha(pedido.fecha_entrega)}
+                                    {esHoy && (
+                                      <span style={{ marginLeft: 5, fontSize: 10, fontWeight: 700, color: '#9A6200' }}>
+                                        HOY
+                                      </span>
+                                    )}
+                                    {vencido && (
+                                      <span style={{ marginLeft: 5, fontSize: 10, fontWeight: 700, color: '#BF3030' }}>
+                                        VENC.
+                                      </span>
+                                    )}
+                                  </span>
+                                ) : (
+                                  <span style={{ color: '#D8D2C7' }}>—</span>
+                                )}
+                              </TD>
+                              <TD>
+                                <Badge type={BADGE[pedido.estado]}>{LABELS[pedido.estado]}</Badge>
+                              </TD>
+                              <TD>
+                                <BtnSm onClick={() => setPedidoDetalle(pedido)}>Ver</BtnSm>
+                              </TD>
+                            </tr>
+                          )
+                        })}
+                  </tbody>
+                </table>
+              </Card>
+            )}
         </>
       )}
 
-      {/* ════════════════════════════════
+      {/* ══════════════════════════════════════════
           VISTA: AGENDA DEL DÍA
-      ════════════════════════════════ */}
+      ══════════════════════════════════════════ */}
       {vista === 'agenda' && (
-        <div className="space-y-6">
-          {/* Pedidos de HOY */}
-          <section>
-            <h2 className="text-base font-semibold text-gray-700 mb-3 flex items-center gap-2">
-              <span className="inline-block w-2 h-2 rounded-full bg-orange-400"></span>
-              Para hoy — {fFecha(hoy)}
-              {urgentesHoy.length > 0 && (
-                <span className="text-xs bg-orange-100 text-orange-700 font-bold px-2 py-0.5 rounded-full">
-                  {urgentesHoy.length} pendiente{urgentesHoy.length > 1 ? 's' : ''}
-                </span>
-              )}
-            </h2>
-
-            {pedidosHoy.length === 0 ? (
-              <p className="text-sm text-gray-400 py-4">No hay pedidos para hoy.</p>
-            ) : (
-              <div className="space-y-3">
-                {pedidosHoy.map((pedido) => {
-                  const despachado = pedido.estado === 'despachado';
-                  const stockInfo  = stockMap[pedido.id];
-                  return (
-                    <Card
-                      key={pedido.id}
-                      className={[
-                        'flex items-start justify-between gap-4 p-4',
-                        despachado
-                          ? 'border-l-4 border-green-400 opacity-70'
-                          : 'border-l-4 border-orange-400',
-                      ].join(' ')}
-                    >
-                      <div className="flex-1 min-w-0">
-                        <div className="flex flex-wrap items-center gap-2 mb-1">
-                          {!despachado && stockInfo && (
-                            <Semaforo estado={stockInfo.global} />
-                          )}
-                          <span className="font-semibold text-gray-800">
-                            {pedido.cliente_nombre}
-                          </span>
-                          <Badge color={COLORES[pedido.estado]}>
-                            {LABELS[pedido.estado]}
-                          </Badge>
-                        </div>
-                        <div className="flex flex-wrap gap-x-3 text-sm text-gray-600">
-                          {(pedido.pedido_items || []).map((item) => (
-                            <span key={item.id}>
-                              {item.productos_terminados?.nombre} &times; {fNum(item.cantidad_pedida)}
-                            </span>
-                          ))}
-                        </div>
-                        {pedido.notas && (
-                          <p className="text-xs text-gray-400 mt-1 italic">{pedido.notas}</p>
-                        )}
-                      </div>
-                      <Btn
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => setPedidoDetalle(pedido)}
-                      >
-                        {despachado ? 'Ver' : 'Gestionar'}
-                      </Btn>
-                    </Card>
-                  );
-                })}
-              </div>
+        <div>
+          {/* Hoy */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 10,
+            marginBottom: 12, fontFamily: 'var(--font-head)', fontSize: 15, fontWeight: 700,
+          }}>
+            Para hoy — {fFecha(hoy)}
+            {urgentesHoy.length > 0 && (
+              <Badge type="warn">
+                {urgentesHoy.length} pendiente{urgentesHoy.length > 1 ? 's' : ''}
+              </Badge>
             )}
-          </section>
+          </div>
+
+          {pedidosHoy.length === 0 ? (
+            <Card pad style={{ marginBottom: 24 }}>
+              <p style={{ color: '#6C6659', fontSize: 13, margin: 0 }}>No hay pedidos para hoy.</p>
+            </Card>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 28 }}>
+              {pedidosHoy.map(pedido => {
+                const despachado = pedido.estado === 'despachado'
+                const si         = stockMap[pedido.id]
+                return (
+                  <Card
+                    key={pedido.id}
+                    style={{
+                      borderLeft: `4px solid ${despachado ? '#1A7A3E' : '#B8722A'}`,
+                      padding: '14px 18px',
+                      display: 'flex', alignItems: 'flex-start',
+                      justifyContent: 'space-between', gap: 16,
+                      opacity: despachado ? 0.7 : 1,
+                    }}
+                  >
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
+                        {!despachado && si && <Semaforo estado={si.global} />}
+                        <span style={{ fontWeight: 700, fontSize: 14 }}>{pedido.cliente_nombre}</span>
+                        <Badge type={BADGE[pedido.estado]}>{LABELS[pedido.estado]}</Badge>
+                      </div>
+                      <div style={{ fontSize: 12, color: '#6C6659' }}>
+                        {(pedido.pedido_items || []).map(item => (
+                          <span key={item.id} style={{ marginRight: 14 }}>
+                            {item.productos_terminados?.nombre} × {fNum(item.cantidad_pedida)}
+                          </span>
+                        ))}
+                      </div>
+                      {pedido.notas && (
+                        <div style={{ fontSize: 11, color: '#9A9080', marginTop: 4, fontStyle: 'italic' }}>
+                          {pedido.notas}
+                        </div>
+                      )}
+                    </div>
+                    <BtnSm onClick={() => setPedidoDetalle(pedido)}>
+                      {despachado ? 'Ver' : 'Gestionar'}
+                    </BtnSm>
+                  </Card>
+                )
+              })}
+            </div>
+          )}
 
           {/* Próximos */}
           {pedidosProximos.length > 0 && (
-            <section>
-              <h2 className="text-base font-semibold text-gray-500 mb-3 flex items-center gap-2">
-                <span className="inline-block w-2 h-2 rounded-full bg-gray-400"></span>
+            <>
+              <div style={{
+                fontFamily: 'var(--font-head)', fontSize: 14,
+                fontWeight: 600, marginBottom: 10, color: '#6C6659',
+              }}>
                 Próximos
-              </h2>
-              <div className="space-y-2">
-                {pedidosProximos.slice(0, 8).map((pedido) => (
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {pedidosProximos.slice(0, 6).map(pedido => (
                   <Card
                     key={pedido.id}
-                    className="flex items-center justify-between gap-3 py-2 px-4"
+                    style={{
+                      padding: '10px 16px',
+                      display: 'flex', alignItems: 'center',
+                      justifyContent: 'space-between', gap: 12,
+                    }}
                   >
-                    <div className="flex items-center gap-3">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                       <Semaforo estado={stockMap[pedido.id]?.global} />
-                      <span className="font-medium text-sm text-gray-700">
-                        {pedido.cliente_nombre}
-                      </span>
-                      <span className="text-sm text-gray-400">
+                      <span style={{ fontWeight: 600, fontSize: 13 }}>{pedido.cliente_nombre}</span>
+                      <span style={{ fontSize: 12, color: '#6C6659' }}>
                         — {pedido.fecha_entrega ? fFecha(pedido.fecha_entrega) : 'Sin fecha'}
                       </span>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <Badge color={COLORES[pedido.estado]}>{LABELS[pedido.estado]}</Badge>
-                      <Btn size="sm" variant="secondary" onClick={() => setPedidoDetalle(pedido)}>
-                        Ver
-                      </Btn>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <Badge type={BADGE[pedido.estado]}>{LABELS[pedido.estado]}</Badge>
+                      <BtnSm onClick={() => setPedidoDetalle(pedido)}>Ver</BtnSm>
                     </div>
                   </Card>
                 ))}
-                {pedidosProximos.length > 8 && (
-                  <p className="text-xs text-gray-400 text-center pt-1">
-                    … y {pedidosProximos.length - 8} más. Usá la vista lista para verlos todos.
-                  </p>
+                {pedidosProximos.length > 6 && (
+                  <div style={{ textAlign: 'center', color: '#6C6659', fontSize: 12, paddingTop: 4 }}>
+                    … y {pedidosProximos.length - 6} más. Usá la vista lista para verlos todos.
+                  </div>
                 )}
               </div>
-            </section>
-          )}
-
-          {pedidosHoy.length === 0 && pedidosProximos.length === 0 && (
-            <p className="text-center text-gray-400 py-20">
-              No hay pedidos pendientes.
-            </p>
+            </>
           )}
         </div>
       )}
 
-      {/* ── Modal crear ── */}
+      {/* ── Modals ── */}
       {modalCrear && (
         <ModalCrear
           productos={productos}
-          loadingAccion={loadingAccion}
+          loading={loadingAccion}
           onClose={() => setModalCrear(false)}
-          onSubmit={handleCrearPedido}
+          onSubmit={handleCrear}
         />
       )}
-
-      {/* ── Modal detalle ── */}
       {pedidoDetalle && (
         <ModalDetalle
           pedido={pedidoDetalle}
           stockInfo={stockMap[pedidoDetalle.id]}
-          loadingAccion={loadingAccion}
+          loading={loadingAccion}
           onClose={() => setPedidoDetalle(null)}
           onAvanzar={() => handleAvanzar(pedidoDetalle)}
           onCancelar={() => handleCancelar(pedidoDetalle)}
-          onCrearOrden={() => handleCrearOrden(pedidoDetalle)}
+          onCrearOrden={handleCrearOrden}
         />
       )}
     </div>
-  );
+  )
 }
