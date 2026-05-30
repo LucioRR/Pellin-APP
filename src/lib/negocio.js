@@ -386,7 +386,7 @@ export async function getPedidos(negocioId, { estado, fechaDesde, fechaHasta } =
     .from('pedidos')
     .select(`
       id, cliente_nombre, fecha_pedido, fecha_entrega,
-      estado, notas, remito_id, creado_en,
+      estado, notas, remito_id, created_at,
       pedido_items (
         id, cantidad_pedida, cantidad_despachada, producto_id,
         productos_terminados ( id, nombre, unidad )
@@ -395,7 +395,7 @@ export async function getPedidos(negocioId, { estado, fechaDesde, fechaHasta } =
     .eq('negocio_id', negocioId)
     .eq('anulado', false)
     .order('fecha_entrega', { ascending: true, nullsFirst: false })
-    .order('creado_en',     { ascending: true })
+    .order('created_at',     { ascending: true })
 
   if (estado && estado !== 'todos') query = query.eq('estado', estado)
   if (fechaDesde) query = query.gte('fecha_entrega', fechaDesde)
