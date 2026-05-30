@@ -308,7 +308,7 @@ function ModalDetalle({ pedido, stockInfo, loading, onClose, onAvanzar, onCancel
 
 export default function Pedidos() {
   const { usuario, negocioActivo, tieneAcceso } = useAuth()
-  const { showToast } = useToast()
+  const { toast } = useToast()
 
   const [pedidos,       setPedidos]       = useState([])
   const [stockMap,      setStockMap]      = useState({})
@@ -389,7 +389,7 @@ export default function Pedidos() {
       )
       setStockMap(nuevoMap)
     } catch (e) {
-      showToast('Error al cargar pedidos: ' + e.message, 'error')
+      toast('Error al cargar pedidos: ' + e.message, 'error')
     } finally {
       setLoading(false)
     }
@@ -401,10 +401,10 @@ export default function Pedidos() {
 
   async function handleCrear(form) {
     if (!form.clienteNombre.trim())
-      return showToast('Ingresá el nombre del cliente', 'error')
+      return toast('Ingresá el nombre del cliente', 'error')
     const itemsValidos = form.items.filter(i => i.productoId && Number(i.cantidad) > 0)
     if (!itemsValidos.length)
-      return showToast('Agregá al menos un producto con cantidad', 'error')
+      return toast('Agregá al menos un producto con cantidad', 'error')
 
     setLoadingAccion(true)
     try {
@@ -419,10 +419,10 @@ export default function Pedidos() {
         usuario.id
       )
       setModalCrear(false)
-      showToast('Pedido creado correctamente', 'success')
+      toast('Pedido creado correctamente', 'success')
       cargarPedidos()
     } catch (e) {
-      showToast('Error al crear pedido: ' + e.message, 'error')
+      toast('Error al crear pedido: ' + e.message, 'error')
     } finally {
       setLoadingAccion(false)
     }
@@ -442,11 +442,11 @@ export default function Pedidos() {
       setLoadingAccion(true)
       try {
         const { numeroFormateado } = await despacharPedido(pedido.id, negocioActivo.id, usuario.id)
-        showToast(`✓ Pedido despachado. Remito ${numeroFormateado} generado.`, 'success')
+        toast(`✓ Pedido despachado. Remito ${numeroFormateado} generado.`, 'success')
         setPedidoDetalle(null)
         cargarPedidos()
       } catch (e) {
-        showToast('Error al despachar: ' + e.message, 'error')
+        toast('Error al despachar: ' + e.message, 'error')
       } finally {
         setLoadingAccion(false)
       }
@@ -457,11 +457,11 @@ export default function Pedidos() {
     setLoadingAccion(true)
     try {
       await updateEstadoPedido(pedido.id, siguiente)
-      showToast(`Pedido actualizado: ${LABELS[siguiente]}`, 'success')
+      toast(`Pedido actualizado: ${LABELS[siguiente]}`, 'success')
       setPedidoDetalle(null)
       cargarPedidos()
     } catch (e) {
-      showToast('Error: ' + e.message, 'error')
+      toast('Error: ' + e.message, 'error')
     } finally {
       setLoadingAccion(false)
     }
@@ -472,18 +472,18 @@ export default function Pedidos() {
     setLoadingAccion(true)
     try {
       await updateEstadoPedido(pedido.id, 'cancelado')
-      showToast('Pedido cancelado', 'success')
+      toast('Pedido cancelado', 'success')
       setPedidoDetalle(null)
       cargarPedidos()
     } catch (e) {
-      showToast('Error: ' + e.message, 'error')
+      toast('Error: ' + e.message, 'error')
     } finally {
       setLoadingAccion(false)
     }
   }
 
   function handleCrearOrden() {
-    showToast('Módulo Órdenes de Producción disponible en Chat 3', 'info')
+    toast('Módulo Órdenes de Producción disponible en Chat 3', 'info')
   }
 
   // ── Datos derivados ───────────────────────────────────────────────────────
