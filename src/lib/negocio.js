@@ -452,9 +452,6 @@ export async function updateEstadoPedido(pedidoId, nuevoEstado) {
     .from('pedidos')
     .update({ estado: nuevoEstado })
     .eq('id', pedidoId)
-    .select()
-    .single()
-
   if (error) throw error
   return data
 }
@@ -539,23 +536,23 @@ export async function despacharPedido(pedidoId, negocioId, userId) {
   // ── 2. Número correlativo ─────────────────────────────────────────────────
   const { data: secRow } = await supabase
     .from('remito_secuencia')
-    .select('ultimo_numero')
+    .select('ultimo')
     .eq('negocio_id', negocioId)
     .maybeSingle()
 
-  const nuevoNumero    = (secRow?.ultimo_numero || 0) + 1
+  const nuevoNumero    = (secRow?.ultimo || 0) + 1
   const numeroFormateado = `R-${String(nuevoNumero).padStart(4, '0')}`
 
   if (secRow) {
     const { error } = await supabase
       .from('remito_secuencia')
-      .update({ ultimo_numero: nuevoNumero })
+      .update({ ultimo: nuevoNumero })
       .eq('negocio_id', negocioId)
     if (error) throw error
   } else {
     const { error } = await supabase
       .from('remito_secuencia')
-      .insert({ negocio_id: negocioId, ultimo_numero: nuevoNumero })
+      .insert({ negocio_id: negocioId, ultimo: nuevoNumero })
     if (error) throw error
   }
 
