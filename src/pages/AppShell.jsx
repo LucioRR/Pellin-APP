@@ -14,7 +14,6 @@ import Caja           from './Caja'
 import Estadisticas   from './Estadisticas'
 import Configuracion  from './Configuracion'
 import Pedidos        from './Pedidos'
-import OrdenesProduccion from './pages/OrdenesProduccion'
 
 
 const NAV = [
