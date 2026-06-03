@@ -636,3 +636,309 @@ export async function despacharPedido(pedidoId, negocioId, userId) {
 
   return { remito, numeroFormateado }
 }
+// ---------------------------------------------------------------------------
+// ÓRDENES DE PRODUCCIÓN
+// ---------------------------------------------------------------------------
+
+/**
+ * Trae todas las órdenes del negocio activo con sus items y producto info.
+ * @param {string} negocioId
+ * @param {object} filtros  { estado: string|null, fechaDesde: string|null, fechaHasta: string|null }
+ */
+export async function getOrdenes(negocioId, filtros = {}) {
+  let q = supabase
+    .from('ordenes_produccion')
+    .select(`
+      *,
+      ordenes_produccion_items (
+        id, producto_id, cantidad_planificada, cantidad_producida,
+        productos_terminados ( id, nombre, unidad )
+      ),
+      pedidos ( id, numero_pedido, cliente_nombre )
+    `)
+    .eq('negocio_id', negocioId)
+    .order('fecha_planificada', { ascending: false })
+
+  if (filtros.estado)      q = q.eq('estado', filtros.estado)
+  if (filtros.fechaDesde)  q = q.gte('fecha_planificada', filtros.fechaDesde)
+  if (filtros.fechaHasta)  q = q.lte('fecha_planificada', filtros.fechaHasta)
+
+  const { data, error } = await q
+  if (error) throw error
+  return data || []
+}
+
+/**
+ * Verificar si hay MP suficiente para producir una lista de productos.
+ * Devuelve { ok: bool, items: [{ producto_id, nombre, ingredientes: [...] }] }
+ * Cada ingrediente tiene { mp_id, nombre, necesario, disponible, deficit }
+ *
+ * @param {string} negocioId
+ * @param {Array}  items  [{ producto_id, cantidad }]
+ */
+export async function checkMPParaOrden(negocioId, items) {
+  if (!items || items.length === 0) return { ok: true, items: [] }
+
+  // Acumular necesidades de MP por producto
+  const productosIds = items.map(i => i.producto_id)
+
+  // Recetas con ingredientes
+  const { data: recetas, error: errR } = await supabase
+    .from('recetas')
+    .select(`
+      id, producto_id,
+      receta_ingredientes (
+        materia_prima_id, cantidad,
+        materias_primas ( id, nombre, stock_actual, unidad )
+      )
+    `)
+    .eq('negocio_id', negocioId)
+    .in('producto_id', productosIds)
+
+  if (errR) throw errR
+
+  // Mapear receta por producto_id
+  const recetaByProducto = {}
+  for (const r of (recetas || [])) {
+    recetaByProducto[r.producto_id] = r
+  }
+
+  // Calcular necesidades totales de MP (acumulado si se pide mismo MP desde distintos productos)
+  const mpNecesario = {} // mp_id -> { nombre, unidad, necesario, disponible }
+
+  const resultado = []
+
+  for (const item of items) {
+    const receta = recetaByProducto[item.producto_id]
+    const detalle = { producto_id: item.producto_id, ingredientes: [] }
+
+    if (!receta) {
+      detalle.sin_receta = true
+      resultado.push(detalle)
+      continue
+    }
+
+    for (const ri of (receta.receta_ingredientes || [])) {
+      const mp = ri.materias_primas
+      const necesario = ri.cantidad * item.cantidad
+
+      if (!mpNecesario[mp.id]) {
+        mpNecesario[mp.id] = {
+          nombre: mp.nombre,
+          unidad: mp.unidad,
+          necesario: 0,
+          disponible: mp.stock_actual || 0,
+        }
+      }
+      mpNecesario[mp.id].necesario += necesario
+
+      detalle.ingredientes.push({
+        mp_id: mp.id,
+        nombre: mp.nombre,
+        unidad: mp.unidad,
+        necesario,
+        disponible: mp.stock_actual || 0,
+        deficit: Math.max(0, necesario - (mp.stock_actual || 0)),
+      })
+    }
+    resultado.push(detalle)
+  }
+
+  // Resultado global con deficit considerando consumo acumulado entre productos
+  const deficitGlobal = {}
+  for (const [mpId, datos] of Object.entries(mpNecesario)) {
+    if (datos.necesario > datos.disponible) {
+      deficitGlobal[mpId] = {
+        nombre: datos.nombre,
+        unidad: datos.unidad,
+        necesario: datos.necesario,
+        disponible: datos.disponible,
+        deficit: datos.necesario - datos.disponible,
+      }
+    }
+  }
+
+  return {
+    ok: Object.keys(deficitGlobal).length === 0,
+    deficitGlobal,
+    items: resultado,
+  }
+}
+
+/**
+ * Crear una nueva orden de producción con sus items.
+ * @param {string} negocioId
+ * @param {string} userId
+ * @param {object} datos  { fecha_planificada, turno, notas, pedido_id, items: [{producto_id, cantidad_planificada}] }
+ */
+export async function createOrden(negocioId, userId, datos) {
+  const { items, ...cabecera } = datos
+
+  // Insertar cabecera
+  const { data: orden, error: errO } = await supabase
+    .from('ordenes_produccion')
+    .insert({
+      negocio_id: negocioId,
+      created_by: userId,
+      estado: 'planificada',
+      fecha_planificada: cabecera.fecha_planificada,
+      turno: cabecera.turno || 'mañana',
+      notas: cabecera.notas || null,
+      pedido_id: cabecera.pedido_id || null,
+    })
+    .select()
+    .single()
+
+  if (errO) throw errO
+
+  // Insertar items
+  if (items && items.length > 0) {
+    const { error: errI } = await supabase
+      .from('ordenes_produccion_items')
+      .insert(
+        items.map(it => ({
+          orden_id: orden.id,
+          producto_id: it.producto_id,
+          cantidad_planificada: it.cantidad_planificada,
+          cantidad_producida: 0,
+        }))
+      )
+    if (errI) throw errI
+  }
+
+  return orden
+}
+
+/**
+ * Actualizar estado de una orden.
+ */
+export async function updateOrdenEstado(ordenId, estado) {
+  const { error } = await supabase
+    .from('ordenes_produccion')
+    .update({ estado })
+    .eq('id', ordenId)
+  if (error) throw error
+}
+
+/**
+ * Completar una orden: actualizar cantidades reales + crear lotes en Producción.
+ * Reutiliza la lógica existente de lotes (INSERT en lotes + descuento de MP).
+ *
+ * @param {string}  negocioId
+ * @param {string}  userId
+ * @param {object}  orden     objeto completo de la orden (con items)
+ * @param {Array}   cantidades [{ item_id, producto_id, cantidad_producida }]
+ * @param {string}  fechaLote  fecha de elaboración para los lotes (YYYY-MM-DD)
+ */
+export async function completarOrden(negocioId, userId, orden, cantidades, fechaLote) {
+  // 1. Actualizar cantidades producidas en los items de la orden
+  for (const c of cantidades) {
+    if (Number(c.cantidad_producida) <= 0) continue
+    const { error } = await supabase
+      .from('ordenes_produccion_items')
+      .update({ cantidad_producida: c.cantidad_producida })
+      .eq('id', c.item_id)
+    if (error) throw error
+  }
+
+  // 2. Para cada item con cantidad > 0, crear lote usando acciones.registrarLote()
+  //    — igual que hace Produccion.jsx — lo que garantiza descuento correcto de MP.
+
+  for (const c of cantidades) {
+    const cant = Number(c.cantidad_producida)
+    if (cant <= 0) continue
+
+    // Buscar la receta del producto (puede haber más de una; tomamos la activa)
+    const { data: recetas, error: errR } = await supabase
+      .from('recetas')
+      .select('*, ingredientes:receta_ingredientes(*)')
+      .eq('negocio_id', negocioId)
+      .eq('producto_id', c.producto_id)
+      .eq('activo', true)
+      .limit(1)
+
+    if (errR) throw errR
+
+    // Si no hay receta activa para este producto, saltar (no bloquear toda la operación)
+    if (!recetas || recetas.length === 0) continue
+
+    const receta = recetas[0]
+
+    // Enriquecer ingredientes con precio_costo actual (igual que Produccion.jsx)
+    const { data: materias } = await supabase
+      .from('materias_primas')
+      .select('id, precio_costo, stock_actual')
+      .eq('negocio_id', negocioId)
+      .in('id', receta.ingredientes.map(i => i.mp_id))
+
+    const materiaMap = {}
+    for (const m of (materias || [])) materiaMap[m.id] = m
+
+    const recetaConPrecios = {
+      ...receta,
+      ingredientes: receta.ingredientes.map(ing => ({
+        ...ing,
+        precio_costo: materiaMap[ing.mp_id]?.precio_costo || 0,
+      })),
+    }
+
+    // Calcular cant_batches: cuántos "lotes-receta" equivalen a la cantidad producida.
+    // La receta tiene un rendimiento por lote; cant_batches = cantidad / rendimiento.
+    // Se redondea a 4 decimales para evitar ruido de punto flotante.
+    const cantBatches = receta.rendimiento > 0
+      ? Math.round((cant / receta.rendimiento) * 10000) / 10000
+      : 1
+
+    await acciones.registrarLote({
+      negocioId,
+      userId,
+      recetaId: receta.id,
+      recetaNombre: receta.nombre,
+      productoId: c.producto_id,
+      fecha: fechaLote,
+      cantBatches,
+      receta: recetaConPrecios,
+      notas: `Generado desde Orden de Producción #${orden.id.slice(0, 8)}`,
+      orden_id: ordenId || null,
+    })
+  }
+
+  // 3. Marcar la orden como completada
+  const { error: errE } = await supabase
+    .from('ordenes_produccion')
+    .update({ estado: 'completada' })
+    .eq('id', orden.id)
+  if (errE) throw errE
+}
+
+/** Helper: sumar días a una fecha string YYYY-MM-DD */
+function calcularFechaVencimiento(fechaBase, dias) {
+  const d = new Date(fechaBase + 'T00:00:00')
+  d.setDate(d.getDate() + dias)
+  return d.toISOString().split('T')[0]
+}
+
+/**
+ * Eliminar/cancelar una orden (solo si está en estado planificada).
+ */
+export async function cancelarOrden(ordenId) {
+  const { error } = await supabase
+    .from('ordenes_produccion')
+    .update({ estado: 'cancelada' })
+    .eq('id', ordenId)
+  if (error) throw error
+}
+
+/**
+ * Traer pedidos pendientes/confirmados para vincular a una orden.
+ */
+export async function getPedidosPendientesParaOrden(negocioId) {
+  const { data, error } = await supabase
+    .from('pedidos')
+    .select('id, numero_pedido, cliente_nombre, fecha_entrega')
+    .eq('negocio_id', negocioId)
+    .in('estado', ['confirmado', 'en_preparacion'])
+    .order('fecha_entrega', { ascending: true })
+  if (error) throw error
+  return data || []
+}

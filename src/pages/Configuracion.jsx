@@ -11,6 +11,7 @@ const MODULOS = [
   { id: 'proveedores', label: 'Proveedores' },
   { id: 'compras', label: 'Compras' },
   { id: 'produccion', label: 'Producción' },
+  { id: 'ordenes_produccion', label: 'Órdenes de Producción' },
   { id: 'productos', label: 'Productos Terminados' },
   { id: 'caja', label: 'Caja' },
   { id: 'estadisticas', label: 'Estadísticas' },
