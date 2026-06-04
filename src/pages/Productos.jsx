@@ -3,8 +3,7 @@ import { supabase, ARS, fNum, fFecha, hoy, r2 } from '../lib/supabase'
 import { useNegocio, acciones } from '../lib/negocio'
 import { useToast } from '../contexts/ToastContext'
 import { useAuth } from '../contexts/AuthContext'
-import { PageHeader, Card, Btn, BtnSm, Badge, Modal, AnularModal, FG, Grid2, Inp, Sel, Tabs, MRow, Spinner, TH, TD, EmptyRow, InfoBox } from '../components/UI'
-import { Ic } from '../components/UI'
+import { PageHeader, Card, Btn, BtnSm, Badge, Modal, AnularModal, FG, Grid2, Inp, Sel, Tabs, MRow, Spinner, TH, TD, EmptyRow, InfoBox, Ic } from '../components/UI'
 
 export default function Productos() {
   const { negocioId } = useNegocio()
@@ -19,8 +18,12 @@ export default function Productos() {
   const [salidaModal, setSalidaModal] = useState(null)
   const [anularModal, setAnularModal] = useState(null)
   const [saving, setSaving] = useState(false)
-  const [form, setForm] = useState({ nombre: '', unidad: 'kg', stock_minimo: '', receta_id: '' })
+  const [form, setForm] = useState({ nombre: '', unidad: 'kg', stock_minimo: '', receta_id: '', vida_util_dias: null })
   const [salidaForm, setSalidaForm] = useState({ productoId: '', cantidad: '', fecha: hoy(), notas: '' })
+  const [lotesProducto, setLotesProducto] = useState([])
+  const [loadingLotes, setLoadingLotes] = useState(false)
+  const [productoDetalle, setProductoDetalle] = useState(null)
+
   const fk = (k, v) => setForm(x => ({ ...x, [k]: v }))
 
   useEffect(() => { if (negocioId) cargar() }, [negocioId])
@@ -38,13 +41,27 @@ export default function Productos() {
     setCargando(false)
   }
 
-  const openAdd = () => { setForm({ nombre: '', unidad: 'kg', stock_minimo: '', receta_id: '' }); setModal('add') }
-  const openEdit = (p) => { setForm({ nombre: p.nombre, unidad: p.unidad, stock_minimo: String(p.stock_minimo), receta_id: p.receta_id || '' }); setModal(p) }
+  const openAdd = () => {
+    setForm({ nombre: '', unidad: 'kg', stock_minimo: '', receta_id: '', vida_util_dias: null })
+    setModal('add')
+  }
+
+  const openEdit = (p) => {
+    setForm({ nombre: p.nombre, unidad: p.unidad, stock_minimo: String(p.stock_minimo), receta_id: p.receta_id || '', vida_util_dias: p.vida_util_dias ?? null })
+    setModal(p)
+  }
 
   const save = async () => {
     if (!form.nombre.trim()) return
     setSaving(true)
-    const payload = { negocio_id: negocioId, nombre: form.nombre, unidad: form.unidad, stock_minimo: +form.stock_minimo || 0, receta_id: form.receta_id || null }
+    const payload = {
+      negocio_id: negocioId,
+      nombre: form.nombre,
+      unidad: form.unidad,
+      stock_minimo: +form.stock_minimo || 0,
+      receta_id: form.receta_id || null,
+      vida_util_dias: form.vida_util_dias || null,
+    }
     if (modal === 'add') {
       const { error } = await supabase.from('productos_terminados').insert(payload)
       if (error) { toast('Error', 'err'); setSaving(false); return }
@@ -95,16 +112,46 @@ export default function Productos() {
     setSaving(false)
   }
 
+  const diasRestantes = (fechaVenc) => {
+    if (!fechaVenc) return null
+    const d = new Date()
+    d.setHours(0, 0, 0, 0)
+    return Math.ceil((new Date(fechaVenc) - d) / (1000 * 60 * 60 * 24))
+  }
+
+  // FIX: usar negocioId (de useNegocio), no negocioActivo.id
+  const cargarLotesProducto = async (producto) => {
+    setProductoDetalle(producto)
+    setLoadingLotes(true)
+    const { data } = await supabase
+      .from('lotes')
+      .select('id, fecha, total_producido, fecha_vencimiento, notas')
+      .eq('producto_id', producto.id)
+      .eq('negocio_id', negocioId)
+      .order('fecha', { ascending: true })
+    setLotesProducto(data || [])
+    setLoadingLotes(false)
+  }
+
   if (cargando) return <Spinner />
 
   return (
     <div>
       <PageHeader title="Productos Terminados"
         action={tab === 'stock'
-          ? <Btn onClick={openAdd}><Ic n="plus" s={14} c="#fff" /> Nuevo producto</Btn>
-          : <Btn onClick={() => { setSalidaForm({ productoId: productos[0]?.id || '', cantidad: '', fecha: hoy(), notas: '' }); setSalidaModal(productos[0] || null) }} disabled={productos.length === 0}>
-            <Ic n="arrow" s={14} c="#fff" /> Registrar salida
-          </Btn>
+          ? (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Btn onClick={openAdd}><Ic n="plus" s={14} c="#fff" /> Nuevo producto</Btn>
+            </div>
+          )
+          : (
+            <Btn
+              onClick={() => { setSalidaForm({ productoId: productos[0]?.id || '', cantidad: '', fecha: hoy(), notas: '' }); setSalidaModal(productos[0] || null) }}
+              disabled={productos.length === 0}
+            >
+              <Ic n="arrow" s={14} c="#fff" /> Registrar salida
+            </Btn>
+          )
         }
       />
 
@@ -113,9 +160,20 @@ export default function Productos() {
       {tab === 'stock' && (
         <Card>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr><TH>Producto</TH><TH>Unidad</TH><TH>En depósito</TH><TH>Stock mínimo</TH><TH>Receta vinculada</TH><TH>Estado</TH><TH></TH></tr></thead>
+            <thead>
+              <tr>
+                <TH>Producto</TH>
+                <TH>Unidad</TH>
+                <TH>En depósito</TH>
+                <TH>Stock mínimo</TH>
+                <TH>Vida útil</TH>
+                <TH>Receta vinculada</TH>
+                <TH>Estado</TH>
+                <TH></TH>
+              </tr>
+            </thead>
             <tbody>
-              {productos.length === 0 && <EmptyRow cols={7} msg="Sin productos terminados. Creá uno para poder vincular lotes." />}
+              {productos.length === 0 && <EmptyRow cols={8} msg="Sin productos terminados. Creá uno para poder vincular lotes." />}
               {productos.map(p => {
                 const bajo = Number(p.stock_actual) <= Number(p.stock_minimo)
                 return (
@@ -124,11 +182,13 @@ export default function Productos() {
                     <TD sm color="var(--muted)">{p.unidad}</TD>
                     <TD bold color={bajo ? '#BF3030' : '#2D6A4F'}>{fNum(p.stock_actual)} {p.unidad}</TD>
                     <TD sm color="var(--muted)">{p.stock_minimo} {p.unidad}</TD>
+                    <TD sm color="var(--muted)">{p.vida_util_dias ? `${p.vida_util_dias}d` : '—'}</TD>
                     <TD sm color="var(--muted)">{p.receta?.nombre || '—'}</TD>
                     <TD><Badge type={bajo ? 'err' : 'ok'}>{bajo ? 'Bajo mínimo' : 'OK'}</Badge></TD>
                     <td style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
                       <div style={{ display: 'flex', gap: 6 }}>
                         <BtnSm onClick={() => openSalida(p)} title="Registrar salida a venta"><Ic n="arrow" s={12} /> Salida</BtnSm>
+                        <BtnSm v="ghost" onClick={() => cargarLotesProducto(p)} title="Ver lotes"><Ic n="list" s={12} /> Lotes</BtnSm>
                         <BtnSm onClick={() => openEdit(p)}><Ic n="edit" s={12} /></BtnSm>
                       </div>
                     </td>
@@ -143,15 +203,23 @@ export default function Productos() {
       {tab === 'salidas' && (
         <Card>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr><TH>Fecha</TH><TH>Producto</TH><TH>Cantidad</TH><TH>Notas</TH><TH>Notas / Remito</TH><TH>Estado</TH><TH></TH></tr></thead>
+            <thead>
+              <tr>
+                <TH>Fecha</TH>
+                <TH>Producto</TH>
+                <TH>Cantidad</TH>
+                <TH>Notas / Remito</TH>
+                <TH>Estado</TH>
+                <TH></TH>
+              </tr>
+            </thead>
             <tbody>
-              {salidas.length === 0 && <EmptyRow cols={7} msg="Sin salidas registradas" />}
+              {salidas.length === 0 && <EmptyRow cols={6} msg="Sin salidas registradas" />}
               {salidas.map(s => (
                 <tr key={s.id} style={{ background: s.anulada ? '#F9F9F7' : 'transparent', opacity: s.anulada ? 0.7 : 1 }}>
                   <TD sm>{fFecha(s.fecha)}</TD>
                   <TD bold>{s.producto_nombre}</TD>
                   <TD>{s.cantidad} {s.unidad}</TD>
-                  <TD sm color="var(--muted)">{s.notas || '—'}</TD>
                   <TD sm color="var(--muted)">{s.notas || '—'}</TD>
                   <TD>
                     {s.anulada
@@ -171,6 +239,7 @@ export default function Productos() {
         </Card>
       )}
 
+      {/* Modal agregar/editar producto */}
       {modal && (
         <Modal title={modal === 'add' ? 'Nuevo Producto Terminado' : 'Editar Producto'} onClose={() => setModal(null)}>
           <FG label="Nombre" required><Inp value={form.nombre} onChange={e => fk('nombre', e.target.value)} /></FG>
@@ -184,12 +253,28 @@ export default function Productos() {
               {recetas.map(r => <option key={r.id} value={r.id}>{r.nombre}</option>)}
             </Sel>
           </FG>
-          <MRow><Btn v="ghost" onClick={() => setModal(null)}>Cancelar</Btn><Btn onClick={save} loading={saving}>Guardar</Btn></MRow>
+          <FG label="Vida útil (días)">
+            <Inp
+              type="number"
+              min="0"
+              value={form.vida_util_dias ?? ''}
+              onChange={e => setForm(f => ({
+                ...f,
+                vida_util_dias: e.target.value !== '' ? parseInt(e.target.value) : null
+              }))}
+              placeholder="Ej: 5 (dejar vacío si no vence)"
+            />
+          </FG>
+          <MRow>
+            <Btn v="ghost" onClick={() => setModal(null)}>Cancelar</Btn>
+            <Btn onClick={save} loading={saving}>Guardar</Btn>
+          </MRow>
         </Modal>
       )}
 
+      {/* Modal registrar salida */}
       {salidaModal && (
-        <Modal title={`Registrar Salida — ${salidaModal.nombre}`} onClose={() => setSalidaModal(null)} narrow>
+        <Modal title={`Registrar Salida — ${salidaModal.nombre}`} onClose={() => setSalidaModal(null)}>
           <p style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 16 }}>
             Stock disponible: <strong>{fNum(salidaModal.stock_actual)} {salidaModal.unidad}</strong>
           </p>
@@ -205,6 +290,66 @@ export default function Productos() {
             <Btn v="ghost" onClick={() => setSalidaModal(null)}>Cancelar</Btn>
             <Btn onClick={saveSalida} loading={saving} disabled={!salidaForm.cantidad || +salidaForm.cantidad > salidaModal.stock_actual}>Confirmar salida</Btn>
           </MRow>
+        </Modal>
+      )}
+
+      {/* Modal lotes por producto */}
+      {productoDetalle && (
+        <Modal
+          title={`Lotes — ${productoDetalle.nombre}`}
+          onClose={() => { setProductoDetalle(null); setLotesProducto([]) }}
+          wide
+        >
+          {loadingLotes ? <Spinner /> : (
+            <>
+              <div style={{ marginBottom: 12, fontSize: 13, color: '#6b7280' }}>
+                Vida útil: {productoDetalle.vida_util_dias
+                  ? `${productoDetalle.vida_util_dias} días`
+                  : 'No configurada — los lotes de este producto no tienen fecha de vencimiento'}
+              </div>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr>
+                    <TH>Fecha producción</TH>
+                    <TH>Cantidad producida</TH>
+                    <TH>Fecha vencimiento</TH>
+                    <TH>Días restantes</TH>
+                    <TH>Notas</TH>
+                  </tr>
+                </thead>
+                <tbody>
+                  {lotesProducto.length === 0
+                    ? <EmptyRow cols={5} msg="Sin lotes registrados para este producto" />
+                    : lotesProducto.map(l => {
+                        const dias = diasRestantes(l.fecha_vencimiento)
+                        const rowBg = dias === null ? 'transparent'
+                          : dias < 0  ? '#ffeaea'
+                          : dias <= 3 ? '#fffbe6'
+                          : 'transparent'
+                        return (
+                          <tr key={l.id} style={{ background: rowBg }}>
+                            <TD>{fFecha(l.fecha)}</TD>
+                            <TD>{fNum(l.total_producido)}</TD>
+                            <TD>{l.fecha_vencimiento ? fFecha(l.fecha_vencimiento) : '—'}</TD>
+                            <TD>
+                              {dias === null
+                                ? '—'
+                                : dias < 0
+                                  ? <Badge type="err">Vencido</Badge>
+                                  : dias <= 3
+                                    ? <Badge type="warn">{dias}d</Badge>
+                                    : <span style={{ color: '#16a34a', fontWeight: 600 }}>{dias}d</span>
+                              }
+                            </TD>
+                            <TD>{l.notas || '—'}</TD>
+                          </tr>
+                        )
+                      })
+                  }
+                </tbody>
+              </table>
+            </>
+          )}
         </Modal>
       )}
 

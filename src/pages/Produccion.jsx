@@ -14,6 +14,7 @@ export default function Produccion() {
   const [lotes, setLotes] = useState([])
   const [recetas, setRecetas] = useState([])
   const [materias, setMaterias] = useState([])
+  // FIX: un solo useState para productos, incluyendo vida_util_dias
   const [productos, setProductos] = useState([])
   const [cargando, setCargando] = useState(true)
   const [loteModal, setLoteModal] = useState(false)
@@ -23,16 +24,20 @@ export default function Produccion() {
   const [loteForm, setLoteForm] = useState({ recetaId: '', productoId: '', fecha: hoy(), cantBatches: '1', notas: '' })
   const [rForm, setRForm] = useState({ nombre: '', rendimiento: '', unidad_rendimiento: 'kg' })
   const [ings, setIngs] = useState([{ mpId: '', mpNombre: '', cantidad: '', unidad: '' }])
+  const [fechaVencCalculada, setFechaVencCalculada] = useState(null)
+  const [filtroVenc, setFiltroVenc] = useState('todos')
 
   useEffect(() => { if (negocioId) cargar() }, [negocioId])
 
   const cargar = async () => {
     setCargando(true)
     const [{ data: ls }, { data: rs }, { data: ms }, { data: ps }] = await Promise.all([
+      // FIX: incluir fecha_vencimiento en el SELECT de lotes
       supabase.from('lotes').select('*, creadoPor:creado_por(nombre), anuladoPor:anulado_por(nombre)').eq('negocio_id', negocioId).order('fecha', { ascending: false }),
       supabase.from('recetas').select('*, ingredientes:receta_ingredientes(*)').eq('negocio_id', negocioId).eq('activo', true).order('nombre'),
       supabase.from('materias_primas').select('id,nombre,unidad,precio_costo,stock_actual').eq('negocio_id', negocioId).eq('activo', true).order('nombre'),
-      supabase.from('productos_terminados').select('id,nombre,unidad').eq('negocio_id', negocioId).eq('activo', true).order('nombre'),
+      // FIX: una sola carga de productos con vida_util_dias incluido
+      supabase.from('productos_terminados').select('id,nombre,unidad,vida_util_dias').eq('negocio_id', negocioId).eq('activo', true).order('nombre'),
     ])
     setLotes(ls || [])
     setRecetas(rs || [])
@@ -40,6 +45,30 @@ export default function Produccion() {
     setProductos(ps || [])
     if (rs?.length) setLoteForm(f => ({ ...f, recetaId: rs[0].id }))
     setCargando(false)
+  }
+
+  // Calcula fecha_vencimiento cuando cambia el producto o la fecha del lote
+  useEffect(() => {
+    if (!loteForm.productoId || !loteForm.fecha) {
+      setFechaVencCalculada(null)
+      return
+    }
+    const prod = productos.find(p => p.id === loteForm.productoId)
+    if (prod?.vida_util_dias) {
+      const base = new Date(loteForm.fecha + 'T00:00:00')
+      base.setDate(base.getDate() + prod.vida_util_dias)
+      setFechaVencCalculada(base.toISOString().split('T')[0])
+    } else {
+      setFechaVencCalculada(null)
+    }
+  }, [loteForm.productoId, loteForm.fecha, productos])
+
+  // Helper días restantes hasta vencimiento
+  const diasRestantes = (fechaVenc) => {
+    if (!fechaVenc) return null
+    const d = new Date()
+    d.setHours(0, 0, 0, 0)
+    return Math.ceil((new Date(fechaVenc) - d) / (1000 * 60 * 60 * 24))
   }
 
   // Lote
@@ -59,6 +88,7 @@ export default function Produccion() {
 
   const openLote = () => {
     setLoteForm({ recetaId: recetas[0]?.id || '', productoId: '', fecha: hoy(), cantBatches: '1', notas: '' })
+    setFechaVencCalculada(null)
     setLoteModal(true)
   }
 
@@ -66,7 +96,6 @@ export default function Produccion() {
     if (!loteForm.recetaId || !cantB) return
     setSaving(true)
     try {
-      // Enriquecer ingredientes con precio_costo actual
       const recetaConPrecios = {
         ...recSel,
         ingredientes: recSel.ingredientes.map(ing => {
@@ -83,9 +112,13 @@ export default function Produccion() {
         cantBatches: cantB,
         receta: recetaConPrecios,
         notas: loteForm.notas,
+        // NUEVO: fecha de vencimiento calculada
+        fechaVencimiento: fechaVencCalculada || null,
       })
       toast('Lote registrado — stock actualizado', 'ok')
-      setLoteModal(false); cargar()
+      setLoteModal(false)
+      setFechaVencCalculada(null)
+      cargar()
     } catch (e) {
       toast(e.message || 'Error', 'err')
     }
@@ -114,7 +147,12 @@ export default function Produccion() {
     }
   }
 
-  const openAddRec = () => { setRForm({ nombre: '', rendimiento: '', unidad_rendimiento: 'kg' }); setIngs([{ mpId: '', mpNombre: '', cantidad: '', unidad: '' }]); setRecetaModal('add') }
+  const openAddRec = () => {
+    setRForm({ nombre: '', rendimiento: '', unidad_rendimiento: 'kg' })
+    setIngs([{ mpId: '', mpNombre: '', cantidad: '', unidad: '' }])
+    setRecetaModal('add')
+  }
+
   const openEditRec = (r) => {
     setRForm({ nombre: r.nombre, rendimiento: String(r.rendimiento), unidad_rendimiento: r.unidad_rendimiento })
     setIngs(r.ingredientes.map(i => ({ mpId: i.mp_id, mpNombre: i.mp_nombre, cantidad: String(i.cantidad), unidad: i.unidad })))
@@ -141,6 +179,16 @@ export default function Produccion() {
     setSaving(false)
   }
 
+  // Filtrado de lotes por estado de vencimiento
+  const lotesFiltrados = lotes.filter(l => {
+    if (filtroVenc === 'todos') return true
+    const d = diasRestantes(l.fecha_vencimiento)
+    if (filtroVenc === 'vencidos') return d !== null && d < 0
+    if (filtroVenc === 'proximos') return d !== null && d >= 0 && d <= 3
+    if (filtroVenc === 'ok') return d === null || d > 3
+    return true
+  })
+
   if (cargando) return <Spinner />
 
   return (
@@ -157,31 +205,75 @@ export default function Produccion() {
       {tab === 'lotes' && (
         <Card>
           {recetas.length === 0 && <InfoBox type="warn" style={{ margin: 16 }}>Creá al menos una receta para poder registrar lotes.</InfoBox>}
+
+          {/* Filtro de vencimiento */}
+          <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
+            <Sel
+              value={filtroVenc}
+              onChange={e => setFiltroVenc(e.target.value)}
+              style={{ minWidth: 200 }}
+            >
+              <option value="todos">Todos los lotes</option>
+              <option value="vencidos">⛔ Vencidos</option>
+              <option value="proximos">⚠️ Vencen en 3 días</option>
+              <option value="ok">✅ Sin alerta</option>
+            </Sel>
+          </div>
+
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr><TH>Fecha</TH><TH>Receta</TH><TH>Lotes</TH><TH>Producido</TH><TH>Costo total</TH><TH>Usuario</TH><TH>Estado</TH><TH></TH></tr></thead>
+            <thead>
+              <tr>
+                <TH>Fecha</TH>
+                <TH>Receta</TH>
+                <TH>Lotes</TH>
+                <TH>Producido</TH>
+                <TH>Costo total</TH>
+                <TH>Vence</TH>
+                <TH>Usuario</TH>
+                <TH>Estado</TH>
+                <TH></TH>
+              </tr>
+            </thead>
             <tbody>
-              {lotes.length === 0 && <EmptyRow cols={8} msg="Sin lotes registrados" />}
-              {lotes.map(l => (
-                <tr key={l.id} style={{ background: l.anulado ? '#F9F9F7' : 'transparent', opacity: l.anulado ? 0.7 : 1 }}>
-                  <TD sm>{fFecha(l.fecha)}</TD>
-                  <TD bold>{l.receta_nombre}</TD>
-                  <TD>{l.cant_batches}x</TD>
-                  <TD bold color={l.anulado ? 'var(--muted)' : '#2D6A4F'}>{l.total_producido} {l.unidad}</TD>
-                  <TD>{ARS(l.costo_total)}</TD>
-                  <TD sm color="var(--muted)">{l.creadoPor?.nombre || '—'}</TD>
-                  <TD>
-                    {l.anulado
-                      ? <><Badge type="gray">Anulado</Badge><div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2 }}>{l.motivo_anulacion}</div></>
-                      : <Badge type="ok">Activo</Badge>
-                    }
-                  </TD>
-                  <td style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
-                    {!l.anulado && esAdmin && (
-                      <BtnSm v="danger" onClick={() => setAnularModal(l)} title="Anular lote"><Ic n="ban" s={12} c="#BF3030" /></BtnSm>
-                    )}
-                  </td>
-                </tr>
-              ))}
+              {lotesFiltrados.length === 0 && <EmptyRow cols={9} msg="Sin lotes para el filtro seleccionado" />}
+              {lotesFiltrados.map(l => {
+                const dias = diasRestantes(l.fecha_vencimiento)
+                const rowBg = l.anulado ? '#F9F9F7'
+                  : dias !== null && dias < 0  ? '#ffeaea'
+                  : dias !== null && dias <= 3 ? '#fffbe6'
+                  : 'transparent'
+                return (
+                  <tr key={l.id} style={{ background: rowBg, opacity: l.anulado ? 0.7 : 1 }}>
+                    <TD sm>{fFecha(l.fecha)}</TD>
+                    <TD bold>{l.receta_nombre}</TD>
+                    <TD>{l.cant_batches}x</TD>
+                    <TD bold color={l.anulado ? 'var(--muted)' : '#2D6A4F'}>{l.total_producido} {l.unidad}</TD>
+                    <TD>{ARS(l.costo_total)}</TD>
+                    <TD>
+                      {!l.fecha_vencimiento
+                        ? <span style={{ color: 'var(--muted)' }}>—</span>
+                        : dias < 0
+                          ? <div><div style={{ fontSize: 12 }}>{fFecha(l.fecha_vencimiento)}</div><Badge type="err">Vencido</Badge></div>
+                          : dias <= 3
+                            ? <div><div style={{ fontSize: 12 }}>{fFecha(l.fecha_vencimiento)}</div><Badge type="warn">{dias}d</Badge></div>
+                            : <div><div style={{ fontSize: 12 }}>{fFecha(l.fecha_vencimiento)}</div><span style={{ fontSize: 11, color: '#16a34a', fontWeight: 600 }}>{dias}d</span></div>
+                      }
+                    </TD>
+                    <TD sm color="var(--muted)">{l.creadoPor?.nombre || '—'}</TD>
+                    <TD>
+                      {l.anulado
+                        ? <><Badge type="gray">Anulado</Badge><div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2 }}>{l.motivo_anulacion}</div></>
+                        : <Badge type="ok">Activo</Badge>
+                      }
+                    </TD>
+                    <td style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
+                      {!l.anulado && esAdmin && (
+                        <BtnSm v="danger" onClick={() => setAnularModal(l)} title="Anular lote"><Ic n="ban" s={12} c="#BF3030" /></BtnSm>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </Card>
@@ -235,7 +327,9 @@ export default function Produccion() {
                 {recetas.map(r => <option key={r.id} value={r.id}>{r.nombre}</option>)}
               </Sel>
             </FG>
-            <FG label="Fecha"><Inp type="date" value={loteForm.fecha} onChange={e => setLoteForm(x => ({ ...x, fecha: e.target.value }))} /></FG>
+            <FG label="Fecha">
+              <Inp type="date" value={loteForm.fecha} onChange={e => setLoteForm(x => ({ ...x, fecha: e.target.value }))} />
+            </FG>
           </Grid2>
           <Grid2>
             <FG label="Cantidad de lotes">
@@ -248,6 +342,24 @@ export default function Produccion() {
               </Sel>
             </FG>
           </Grid2>
+
+          {/* Fecha de vencimiento calculada automáticamente */}
+          {loteForm.productoId && (
+            <div style={{ marginBottom: 12 }}>
+              {fechaVencCalculada
+                ? (
+                  <div style={{ fontSize: 13, color: '#166534', padding: '6px 10px', background: '#f0fdf4', borderRadius: 6, display: 'inline-block' }}>
+                    📅 Fecha de vencimiento: <strong>{fFecha(fechaVencCalculada)}</strong>
+                  </div>
+                )
+                : (
+                  <div style={{ fontSize: 12, color: '#9ca3af' }}>
+                    Sin vida útil configurada para este producto — el lote no tendrá fecha de vencimiento
+                  </div>
+                )
+              }
+            </div>
+          )}
 
           {recSel && (
             <div style={{ background: '#EAE5DC', borderRadius: 8, padding: 14, marginBottom: 14 }}>

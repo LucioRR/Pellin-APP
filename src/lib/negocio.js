@@ -211,7 +211,7 @@ export const acciones = {
   },
 
   // Registrar lote de producción
-  async registrarLote({ negocioId, userId, recetaId, recetaNombre, productoId, fecha, cantBatches, receta }) {
+  async registrarLote({ negocioId, userId, recetaId, recetaNombre, productoId, fecha, cantBatches, receta, fechaVencimiento  }) {
     const totalProducido = r2(receta.rendimiento * cantBatches)
     const costoTotal = r2(
       receta.ingredientes.reduce((s, ing) => {
@@ -232,6 +232,8 @@ export const acciones = {
         unidad: receta.unidad_rendimiento,
         costo_total: costoTotal,
         creado_por: userId,
+        orden_id: ordenId || null,
+        fecha_vencimiento: fechaVencimiento || null,
       })
       .select()
       .single()
