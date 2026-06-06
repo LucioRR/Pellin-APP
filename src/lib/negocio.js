@@ -51,7 +51,6 @@ export const acciones = {
 
     // 3. Para cada item: actualizar stock y precio
     for (const item of items) {
-      // Obtener stock y precio actual
       const { data: mp } = await supabase
         .from('materias_primas')
         .select('stock_actual, precio_costo')
@@ -63,7 +62,6 @@ export const acciones = {
       const nuevoStock = r2(mp.stock_actual + item.cantidad)
       const precioAnterior = mp.precio_costo
 
-      // Actualizar stock y precio
       await supabase.from('materias_primas').update({
         stock_actual: nuevoStock,
         precio_costo: item.precioUnitario,
@@ -71,7 +69,6 @@ export const acciones = {
         precio_actualizado_por: userId,
       }).eq('id', item.mpId)
 
-      // Registrar historial de precio solo si cambió
       if (precioAnterior !== item.precioUnitario) {
         await supabase.from('historial_precios').insert({
           mp_id: item.mpId,
@@ -89,7 +86,6 @@ export const acciones = {
 
   // Anular factura: revierte stock y precio si corresponde
   async anularFactura({ facturaId, userId, motivo }) {
-    // Obtener items
     const { data: items } = await supabase
       .from('factura_items')
       .select('*')
@@ -101,7 +97,6 @@ export const acciones = {
       .eq('id', facturaId)
       .single()
 
-    // Anular factura
     const { error } = await supabase.from('facturas').update({
       anulada: true,
       anulada_por: userId,
@@ -110,7 +105,6 @@ export const acciones = {
     }).eq('id', facturaId)
     if (error) throw error
 
-    // Revertir stock y precio de cada item
     for (const item of (items || [])) {
       const { data: mp } = await supabase
         .from('materias_primas')
@@ -122,7 +116,6 @@ export const acciones = {
 
       const nuevoStock = r2(mp.stock_actual - item.cantidad)
 
-      // Ver si el precio actual viene de esta factura
       const { data: historial } = await supabase
         .from('historial_precios')
         .select('*')
@@ -140,7 +133,6 @@ export const acciones = {
         updates.precio_costo = ultimoHist.precio_ant
         updates.precio_actualizado_en = new Date().toISOString()
         updates.precio_actualizado_por = userId
-        // Registrar reversión en historial
         await supabase.from('historial_precios').insert({
           mp_id: item.mp_id,
           precio_ant: ultimoHist.precio_nvo,
@@ -172,7 +164,6 @@ export const acciones = {
       .single()
     if (pe) throw pe
 
-    // Egreso automático en caja
     const { error: ce } = await supabase.from('caja').insert({
       negocio_id: negocioId,
       fecha,
@@ -201,7 +192,6 @@ export const acciones = {
     }).eq('id', pagoId)
     if (error) throw error
 
-    // Anular caja asociada
     await supabase.from('caja').update({
       anulado: true,
       anulado_por: userId,
@@ -211,7 +201,8 @@ export const acciones = {
   },
 
   // Registrar lote de producción
-  async registrarLote({ negocioId, userId, recetaId, recetaNombre, productoId, fecha, cantBatches, receta, fechaVencimiento  }) {
+  // FIX: firma incluye ordenId y fechaVencimiento correctamente
+  async registrarLote({ negocioId, userId, recetaId, recetaNombre, productoId, fecha, cantBatches, receta, notas, ordenId, fechaVencimiento }) {
     const totalProducido = r2(receta.rendimiento * cantBatches)
     const costoTotal = r2(
       receta.ingredientes.reduce((s, ing) => {
@@ -232,7 +223,8 @@ export const acciones = {
         unidad: receta.unidad_rendimiento,
         costo_total: costoTotal,
         creado_por: userId,
-        orden_id: ordenId || null,
+        notas: notas || null,
+        orden_id: ordenId || null,           // FIX: era ordenId sin declarar
         fecha_vencimiento: fechaVencimiento || null,
       })
       .select()
@@ -313,7 +305,7 @@ export const acciones = {
     }
   },
 
-  // Registrar salida de producción
+  // Registrar salida de producción (salida manual desde Productos.jsx)
   async registrarSalida({ negocioId, userId, productoId, productoNombre, fecha, cantidad, unidad, notas }) {
     const { data: pt } = await supabase
       .from('productos_terminados')
@@ -334,6 +326,7 @@ export const acciones = {
         unidad,
         notas,
         creado_por: userId,
+        // lote_id: null — salida manual sin trazabilidad de lote
       })
       .select()
       .single()
@@ -376,13 +369,77 @@ export const acciones = {
     }
   },
 }
+
+// ─────────────────────────────────────────────
+// HELPERS INTERNOS
+// ─────────────────────────────────────────────
+
+/** Sumar días a una fecha string YYYY-MM-DD */
+function calcularFechaVencimiento(fechaBase, dias) {
+  const d = new Date(fechaBase + 'T00:00:00')
+  d.setDate(d.getDate() + dias)
+  return d.toISOString().split('T')[0]
+}
+
+/**
+ * Distribuye una cantidad pedida entre los lotes disponibles de un producto
+ * siguiendo orden FIFO (fecha ASC). Devuelve array de líneas para insertar
+ * en salidas_produccion, cada una con lote_id.
+ *
+ * @param {string} negocioId
+ * @param {string} productoId
+ * @param {number} cantidadPedida
+ * @returns {Array} [{ loteId, cantidad, loteDate, loteVenc }]
+ */
+async function distribuirFIFO(negocioId, productoId, cantidadPedida) {
+  const { data: lotes } = await supabase
+    .from('lotes')
+    .select('id, fecha, total_producido, fecha_vencimiento')
+    .eq('producto_id', productoId)
+    .eq('negocio_id', negocioId)
+    .eq('anulado', false)
+    .order('fecha', { ascending: true })
+
+  if (!lotes || lotes.length === 0) return []
+
+  // Stock real disponible por lote = total_producido - salidas activas
+  const lotesConStock = await Promise.all(lotes.map(async (lote) => {
+    const { data: salidas } = await supabase
+      .from('salidas_produccion')
+      .select('cantidad')
+      .eq('lote_id', lote.id)
+      .eq('anulada', false)
+
+    const consumido = (salidas || []).reduce((s, sal) => s + Number(sal.cantidad), 0)
+    const disponible = Math.round((Number(lote.total_producido) - consumido) * 100) / 100
+    return { ...lote, disponible: Math.max(0, disponible) }
+  }))
+
+  const lineas = []
+  let restante = cantidadPedida
+
+  for (const lote of lotesConStock) {
+    if (restante <= 0) break
+    if (lote.disponible <= 0) continue
+
+    const tomar = Math.min(restante, lote.disponible)
+    restante = Math.round((restante - tomar) * 100) / 100
+
+    lineas.push({
+      loteId: lote.id,
+      loteDate: lote.fecha,
+      loteVenc: lote.fecha_vencimiento,
+      cantidad: tomar,
+    })
+  }
+
+  return lineas
+}
+
 // ─────────────────────────────────────────────
 // PEDIDOS MAYORISTAS
 // ─────────────────────────────────────────────
 
-/**
- * Obtiene pedidos del negocio activo con sus ítems.
- */
 export async function getPedidos(negocioId, { estado, fechaDesde, fechaHasta } = {}) {
   let query = supabase
     .from('pedidos')
@@ -408,10 +465,6 @@ export async function getPedidos(negocioId, { estado, fechaDesde, fechaHasta } =
   return data || []
 }
 
-/**
- * Crea un pedido mayorista con sus ítems.
- * items: [{ productoId, cantidad }]
- */
 export async function createPedido(negocioId, { clienteNombre, fechaEntrega, notas, items }, userId) {
   const { data: pedido, error: pedidoError } = await supabase
     .from('pedidos')
@@ -445,10 +498,6 @@ export async function createPedido(negocioId, { clienteNombre, fechaEntrega, not
   return pedido
 }
 
-/**
- * Avanza el estado de un pedido.
- * No usar para 'despachado' — usar despacharPedido().
- */
 export async function updateEstadoPedido(pedidoId, nuevoEstado) {
   const { data, error } = await supabase
     .from('pedidos')
@@ -458,19 +507,6 @@ export async function updateEstadoPedido(pedidoId, nuevoEstado) {
   return data
 }
 
-/**
- * Verifica stock disponible para un array de ítems.
- * Usa stock_actual de productos_terminados (campo mantenido por el sistema).
- *
- * items: [{ productoId, cantidad_pedida, nombre? }]
- *
- * Retorna el mismo array con:
- *   { stockDisponible, estado: 'verde' | 'amarillo' | 'rojo' }
- *
- * Verde    = stockDisponible >= cantidad_pedida
- * Amarillo = 0 < stockDisponible < cantidad_pedida
- * Rojo     = stockDisponible === 0
- */
 export async function checkStockPedido(negocioId, items) {
   if (!items?.length) return []
 
@@ -504,19 +540,15 @@ export async function checkStockPedido(negocioId, items) {
 
 /**
  * Despacha un pedido generando el remito automáticamente.
+ * Usa FIFO para vincular cada salida al lote correspondiente.
  *
  * Flujo:
  *  1. Carga el pedido con sus ítems y productos.
  *  2. Obtiene/crea el número correlativo (remito_secuencia).
  *  3. Inserta el remito.
- *  4. Por cada ítem: inserta remito_item + salida_produccion + descuenta stock_actual.
+ *  4. Por cada ítem: inserta remito_item + salidas_produccion por lote (FIFO) + descuenta stock_actual.
  *  5. Actualiza cantidad_despachada en pedido_items.
  *  6. Cierra el pedido: estado = 'despachado', remito_id.
- *
- * ⚠ VERIFICAR antes de usar:
- *   - Columnas de 'remitos': si tu tabla usa 'receptor' en vez de 'destinatario', ajustalo abajo.
- *   - Columnas de 'remito_items': si no tiene 'producto_nombre' o 'unidad', quitarlos del insert.
- *   - Si Remitos.jsx usa una lógica diferente para la secuencia, replicarla acá.
  */
 export async function despacharPedido(pedidoId, negocioId, userId) {
   // ── 1. Cargar pedido ──────────────────────────────────────────────────────
@@ -542,7 +574,7 @@ export async function despacharPedido(pedidoId, negocioId, userId) {
     .eq('negocio_id', negocioId)
     .maybeSingle()
 
-  const nuevoNumero    = (secRow?.ultimo || 0) + 1
+  const nuevoNumero      = (secRow?.ultimo || 0) + 1
   const numeroFormateado = `R-${String(nuevoNumero).padStart(4, '0')}`
 
   if (secRow) {
@@ -559,18 +591,16 @@ export async function despacharPedido(pedidoId, negocioId, userId) {
   }
 
   // ── 3. Crear remito ───────────────────────────────────────────────────────
-  // ⚠ Ajustar nombres de columna si difieren de tu tabla remitos real.
-  //   Abrí Remitos.jsx y buscá el .insert() para confirmar los campos.
-  const hoy = new Date().toISOString().split('T')[0]
+  const fechaHoy = new Date().toISOString().split('T')[0]
 
   const { data: remito, error: remitoError } = await supabase
     .from('remitos')
     .insert({
-      negocio_id:   negocioId,
-      numero:       numeroFormateado,
-      fecha:        hoy,
-      destino: pedido.cliente_nombre, // ← verificar nombre de columna
-      creado_por:   userId,
+      negocio_id: negocioId,
+      numero:     numeroFormateado,
+      fecha:      fechaHoy,
+      destino:    pedido.cliente_nombre,
+      creado_por: userId,
     })
     .select()
     .single()
@@ -580,12 +610,11 @@ export async function despacharPedido(pedidoId, negocioId, userId) {
   // ── 4. Procesar cada ítem ─────────────────────────────────────────────────
   for (const item of pedido.pedido_items) {
     const pt       = item.productos_terminados
-    const nombre   = pt?.nombre   || ''
-    const unidad   = pt?.unidad   || 'kg'
+    const nombre   = pt?.nombre || ''
+    const unidad   = pt?.unidad || 'kg'
     const cantidad = Number(item.cantidad_pedida)
 
     // 4a. remito_item
-    // ⚠ Ajustar si tu tabla remito_items no tiene producto_nombre o unidad
     const { error: riError } = await supabase
       .from('remito_items')
       .insert({
@@ -597,21 +626,64 @@ export async function despacharPedido(pedidoId, negocioId, userId) {
       })
     if (riError) throw riError
 
-    // 4b. salida_produccion (columnas confirmadas en schema.sql)
-    const { error: spError } = await supabase
-      .from('salidas_produccion')
-      .insert({
-        negocio_id:      negocioId,
-        producto_id:     item.producto_id,
-        producto_nombre: nombre,
-        fecha:           hoy,
-        cantidad,
-        unidad,
-        notas:           `Remito ${numeroFormateado} — ${pedido.cliente_nombre}`,
-        creado_por:      userId,
-        remito_id:       remito.id,
-      })
-    if (spError) throw spError
+    // 4b. Distribuir por lotes FIFO y crear una salida por lote
+    const lineasFIFO = await distribuirFIFO(negocioId, item.producto_id, cantidad)
+
+    if (lineasFIFO.length > 0) {
+      // Hay lotes: insertar una salida por línea FIFO con lote_id
+      for (const linea of lineasFIFO) {
+        const { error: spError } = await supabase
+          .from('salidas_produccion')
+          .insert({
+            negocio_id:      negocioId,
+            producto_id:     item.producto_id,
+            producto_nombre: nombre,
+            fecha:           fechaHoy,
+            cantidad:        linea.cantidad,
+            unidad,
+            notas:           `Remito ${numeroFormateado} — ${pedido.cliente_nombre}`,
+            creado_por:      userId,
+            remito_id:       remito.id,
+            lote_id:         linea.loteId,
+          })
+        if (spError) throw spError
+      }
+
+      // Si quedó alguna cantidad sin cubrir por lotes (raro, pero posible)
+      const totalFIFO = lineasFIFO.reduce((s, l) => s + l.cantidad, 0)
+      const restante  = Math.round((cantidad - totalFIFO) * 100) / 100
+      if (restante > 0) {
+        await supabase.from('salidas_produccion').insert({
+          negocio_id:      negocioId,
+          producto_id:     item.producto_id,
+          producto_nombre: nombre,
+          fecha:           fechaHoy,
+          cantidad:        restante,
+          unidad,
+          notas:           `Remito ${numeroFormateado} — ${pedido.cliente_nombre} (sin lote asignado)`,
+          creado_por:      userId,
+          remito_id:       remito.id,
+          lote_id:         null,
+        })
+      }
+    } else {
+      // Sin lotes registrados: insertar salida sin lote_id (fallback)
+      const { error: spError } = await supabase
+        .from('salidas_produccion')
+        .insert({
+          negocio_id:      negocioId,
+          producto_id:     item.producto_id,
+          producto_nombre: nombre,
+          fecha:           fechaHoy,
+          cantidad,
+          unidad,
+          notas:           `Remito ${numeroFormateado} — ${pedido.cliente_nombre}`,
+          creado_por:      userId,
+          remito_id:       remito.id,
+          lote_id:         null,
+        })
+      if (spError) throw spError
+    }
 
     // 4c. Descontar stock_actual en productos_terminados
     const stockActual = Number(pt?.stock_actual || 0)
@@ -638,15 +710,11 @@ export async function despacharPedido(pedidoId, negocioId, userId) {
 
   return { remito, numeroFormateado }
 }
+
 // ---------------------------------------------------------------------------
 // ÓRDENES DE PRODUCCIÓN
 // ---------------------------------------------------------------------------
 
-/**
- * Trae todas las órdenes del negocio activo con sus items y producto info.
- * @param {string} negocioId
- * @param {object} filtros  { estado: string|null, fechaDesde: string|null, fechaHasta: string|null }
- */
 export async function getOrdenes(negocioId, filtros = {}) {
   let q = supabase
     .from('ordenes_produccion')
@@ -670,21 +738,11 @@ export async function getOrdenes(negocioId, filtros = {}) {
   return data || []
 }
 
-/**
- * Verificar si hay MP suficiente para producir una lista de productos.
- * Devuelve { ok: bool, items: [{ producto_id, nombre, ingredientes: [...] }] }
- * Cada ingrediente tiene { mp_id, nombre, necesario, disponible, deficit }
- *
- * @param {string} negocioId
- * @param {Array}  items  [{ producto_id, cantidad }]
- */
 export async function checkMPParaOrden(negocioId, items) {
   if (!items || items.length === 0) return { ok: true, items: [] }
 
-  // Acumular necesidades de MP por producto
   const productosIds = items.map(i => i.producto_id)
 
-  // Recetas con ingredientes
   const { data: recetas, error: errR } = await supabase
     .from('recetas')
     .select(`
@@ -699,15 +757,12 @@ export async function checkMPParaOrden(negocioId, items) {
 
   if (errR) throw errR
 
-  // Mapear receta por producto_id
   const recetaByProducto = {}
   for (const r of (recetas || [])) {
     recetaByProducto[r.producto_id] = r
   }
 
-  // Calcular necesidades totales de MP (acumulado si se pide mismo MP desde distintos productos)
-  const mpNecesario = {} // mp_id -> { nombre, unidad, necesario, disponible }
-
+  const mpNecesario = {}
   const resultado = []
 
   for (const item of items) {
@@ -746,7 +801,6 @@ export async function checkMPParaOrden(negocioId, items) {
     resultado.push(detalle)
   }
 
-  // Resultado global con deficit considerando consumo acumulado entre productos
   const deficitGlobal = {}
   for (const [mpId, datos] of Object.entries(mpNecesario)) {
     if (datos.necesario > datos.disponible) {
@@ -767,16 +821,9 @@ export async function checkMPParaOrden(negocioId, items) {
   }
 }
 
-/**
- * Crear una nueva orden de producción con sus items.
- * @param {string} negocioId
- * @param {string} userId
- * @param {object} datos  { fecha_planificada, turno, notas, pedido_id, items: [{producto_id, cantidad_planificada}] }
- */
 export async function createOrden(negocioId, userId, datos) {
   const { items, ...cabecera } = datos
 
-  // Insertar cabecera
   const { data: orden, error: errO } = await supabase
     .from('ordenes_produccion')
     .insert({
@@ -793,7 +840,6 @@ export async function createOrden(negocioId, userId, datos) {
 
   if (errO) throw errO
 
-  // Insertar items
   if (items && items.length > 0) {
     const { error: errI } = await supabase
       .from('ordenes_produccion_items')
@@ -811,9 +857,6 @@ export async function createOrden(negocioId, userId, datos) {
   return orden
 }
 
-/**
- * Actualizar estado de una orden.
- */
 export async function updateOrdenEstado(ordenId, estado) {
   const { error } = await supabase
     .from('ordenes_produccion')
@@ -824,13 +867,7 @@ export async function updateOrdenEstado(ordenId, estado) {
 
 /**
  * Completar una orden: actualizar cantidades reales + crear lotes en Producción.
- * Reutiliza la lógica existente de lotes (INSERT en lotes + descuento de MP).
- *
- * @param {string}  negocioId
- * @param {string}  userId
- * @param {object}  orden     objeto completo de la orden (con items)
- * @param {Array}   cantidades [{ item_id, producto_id, cantidad_producida }]
- * @param {string}  fechaLote  fecha de elaboración para los lotes (YYYY-MM-DD)
+ * FIX: firma incluye ordenId como parámetro nombrado correctamente.
  */
 export async function completarOrden(negocioId, userId, orden, cantidades, fechaLote) {
   // 1. Actualizar cantidades producidas en los items de la orden
@@ -844,13 +881,10 @@ export async function completarOrden(negocioId, userId, orden, cantidades, fecha
   }
 
   // 2. Para cada item con cantidad > 0, crear lote usando acciones.registrarLote()
-  //    — igual que hace Produccion.jsx — lo que garantiza descuento correcto de MP.
-
   for (const c of cantidades) {
     const cant = Number(c.cantidad_producida)
     if (cant <= 0) continue
 
-    // Buscar la receta del producto (puede haber más de una; tomamos la activa)
     const { data: recetas, error: errR } = await supabase
       .from('recetas')
       .select('*, ingredientes:receta_ingredientes(*)')
@@ -860,13 +894,10 @@ export async function completarOrden(negocioId, userId, orden, cantidades, fecha
       .limit(1)
 
     if (errR) throw errR
-
-    // Si no hay receta activa para este producto, saltar (no bloquear toda la operación)
     if (!recetas || recetas.length === 0) continue
 
     const receta = recetas[0]
 
-    // Enriquecer ingredientes con precio_costo actual (igual que Produccion.jsx)
     const { data: materias } = await supabase
       .from('materias_primas')
       .select('id, precio_costo, stock_actual')
@@ -884,12 +915,20 @@ export async function completarOrden(negocioId, userId, orden, cantidades, fecha
       })),
     }
 
-    // Calcular cant_batches: cuántos "lotes-receta" equivalen a la cantidad producida.
-    // La receta tiene un rendimiento por lote; cant_batches = cantidad / rendimiento.
-    // Se redondea a 4 decimales para evitar ruido de punto flotante.
     const cantBatches = receta.rendimiento > 0
       ? Math.round((cant / receta.rendimiento) * 10000) / 10000
       : 1
+
+    // Calcular fecha de vencimiento desde la receta/producto si tiene vida_util_dias
+    const { data: producto } = await supabase
+      .from('productos_terminados')
+      .select('vida_util_dias')
+      .eq('id', c.producto_id)
+      .single()
+
+    const fechaVencimiento = producto?.vida_util_dias
+      ? calcularFechaVencimiento(fechaLote, producto.vida_util_dias)
+      : null
 
     await acciones.registrarLote({
       negocioId,
@@ -901,7 +940,8 @@ export async function completarOrden(negocioId, userId, orden, cantidades, fecha
       cantBatches,
       receta: recetaConPrecios,
       notas: `Generado desde Orden de Producción #${orden.id.slice(0, 8)}`,
-      orden_id: ordenId || null,
+      ordenId: orden.id,              // FIX: era ordenId sin declarar en la firma anterior
+      fechaVencimiento,               // NUEVO: propagar vencimiento desde completarOrden
     })
   }
 
@@ -913,16 +953,6 @@ export async function completarOrden(negocioId, userId, orden, cantidades, fecha
   if (errE) throw errE
 }
 
-/** Helper: sumar días a una fecha string YYYY-MM-DD */
-function calcularFechaVencimiento(fechaBase, dias) {
-  const d = new Date(fechaBase + 'T00:00:00')
-  d.setDate(d.getDate() + dias)
-  return d.toISOString().split('T')[0]
-}
-
-/**
- * Eliminar/cancelar una orden (solo si está en estado planificada).
- */
 export async function cancelarOrden(ordenId) {
   const { error } = await supabase
     .from('ordenes_produccion')
@@ -931,9 +961,6 @@ export async function cancelarOrden(ordenId) {
   if (error) throw error
 }
 
-/**
- * Traer pedidos pendientes/confirmados para vincular a una orden.
- */
 export async function getPedidosPendientesParaOrden(negocioId) {
   const { data, error } = await supabase
     .from('pedidos')

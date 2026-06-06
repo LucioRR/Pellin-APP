@@ -12,6 +12,7 @@ import {
 
 const padNum = (n) => String(n).padStart(4, '0')
 const ARS = (n) => `$${Number(n || 0).toLocaleString('es-AR')}`
+const fNum = (n) => Number(n || 0).toLocaleString('es-AR', { maximumFractionDigits: 2 })
 
 // ── Componente de impresión ────────────────────────────────────────────────
 function PrintRemito({ remito, items, negocioNombre }) {
@@ -85,13 +86,16 @@ export default function Remitos() {
   const [productos, setProductos]       = useState([])
   const [cargando, setCargando]         = useState(true)
   const [modal, setModal]               = useState(false)
+  const [previewModal, setPreviewModal] = useState(false)
+  const [previewData, setPreviewData]   = useState([]) // desglose FIFO calculado
   const [anularModal, setAnularModal]   = useState(null)
   const [saving, setSaving]             = useState(false)
   const [detalleId, setDetalleId]       = useState(null)
   const [detalleItems, setDetalleItems] = useState([])
+  const [detalleLotes, setDetalleLotes] = useState([]) // salidas por lote del remito abierto
   const [loadingDet, setLoadingDet]     = useState(false)
 
-  // Print: separamos datos del trigger para que useEffect controle el timing
+  // Print
   const [printData, setPrintData]       = useState({ remito: null, items: [] })
   const [triggerPrint, setTriggerPrint] = useState(false)
 
@@ -99,7 +103,6 @@ export default function Remitos() {
   const [form, setForm] = useState({ destino: '', fecha: hoy(), notas: '' })
   const [items, setItems] = useState([{ productoId: '', productoNombre: '', cantidad: '', unidad: '' }])
 
-  // Disparar print solo después de que React re-renderizó con los datos de impresión
   useEffect(() => {
     if (triggerPrint && printData.remito) {
       const t = setTimeout(() => { window.print(); setTriggerPrint(false) }, 250)
@@ -127,11 +130,26 @@ export default function Remitos() {
 
   // ── Detalle expandible ────────────────────────────────────────────────────
   const toggleDetalle = async (remito) => {
-    if (detalleId === remito.id) { setDetalleId(null); setDetalleItems([]); return }
+    if (detalleId === remito.id) {
+      setDetalleId(null); setDetalleItems([]); setDetalleLotes([])
+      return
+    }
     setDetalleId(remito.id)
     setLoadingDet(true)
-    const { data } = await supabase.from('remito_items').select('*').eq('remito_id', remito.id)
-    setDetalleItems(data || [])
+
+    // Cargar items del remito y salidas por lote en paralelo
+    const [{ data: its }, { data: salidas }] = await Promise.all([
+      supabase.from('remito_items').select('*').eq('remito_id', remito.id),
+      supabase.from('salidas_produccion')
+        .select('*, lote:lote_id(id, fecha, fecha_vencimiento)')
+        .eq('remito_id', remito.id)
+        .eq('anulada', false)
+        .not('lote_id', 'is', null)
+        .order('producto_nombre'),
+    ])
+
+    setDetalleItems(its || [])
+    setDetalleLotes(salidas || [])
     setLoadingDet(false)
   }
 
@@ -160,20 +178,121 @@ export default function Remitos() {
     setModal(true)
   }
 
-  // ── Registrar remito ──────────────────────────────────────────────────────
-  const save = async () => {
-    if (!canSave) return
-    setSaving(true)
-    try {
-      // Verificar stock de todos los ítems antes de operar
-      for (const it of items) {
-        const prod = productos.find(p => p.id === it.productoId)
-        if (!prod || Number(prod.stock_actual) < Number(it.cantidad)) {
-          toast(`Stock insuficiente: ${prod?.nombre || 'producto seleccionado'}`, 'err')
-          setSaving(false); return
-        }
+  // ── Distribución FIFO ─────────────────────────────────────────────────────
+  // Para cada producto en el remito, carga sus lotes ordenados por fecha ASC,
+  // calcula stock real disponible por lote (total_producido - salidas con ese lote_id)
+  // y reparte la cantidad pedida entre lotes de más antiguo a más nuevo.
+  // Devuelve un array de líneas listas para insertar en salidas_produccion.
+  const calcularFIFO = async () => {
+    const lineas = [] // { productoId, productoNombre, unidad, loteId, loteDate, loteVenc, cantidad }
+
+    for (const it of items) {
+      const prod = productos.find(p => p.id === it.productoId)
+      if (!prod) continue
+      const cantidadPedida = Number(it.cantidad)
+
+      // 1. Cargar lotes del producto ordenados por fecha ASC (FIFO)
+      const { data: lotes } = await supabase
+        .from('lotes')
+        .select('id, fecha, total_producido, fecha_vencimiento')
+        .eq('producto_id', it.productoId)
+        .eq('negocio_id', negocioId)
+        .eq('anulado', false)
+        .order('fecha', { ascending: true })
+
+      if (!lotes || lotes.length === 0) {
+        // Sin lotes registrados: insertar salida sin lote_id (fallback)
+        lineas.push({
+          productoId: it.productoId,
+          productoNombre: it.productoNombre,
+          unidad: it.unidad,
+          loteId: null,
+          loteDate: null,
+          loteVenc: null,
+          cantidad: cantidadPedida,
+          sinLote: true,
+        })
+        continue
       }
 
+      // 2. Para cada lote, calcular stock disponible real
+      //    = total_producido - SUM(salidas activas con ese lote_id)
+      const lotesConStock = await Promise.all(lotes.map(async (lote) => {
+        const { data: salidas } = await supabase
+          .from('salidas_produccion')
+          .select('cantidad')
+          .eq('lote_id', lote.id)
+          .eq('anulada', false)
+
+        const consumido = (salidas || []).reduce((s, sal) => s + Number(sal.cantidad), 0)
+        const disponible = Math.round((Number(lote.total_producido) - consumido) * 100) / 100
+        return { ...lote, disponible: Math.max(0, disponible) }
+      }))
+
+      // 3. Distribuir la cantidad pedida entre lotes (FIFO)
+      let restante = cantidadPedida
+
+      for (const lote of lotesConStock) {
+        if (restante <= 0) break
+        if (lote.disponible <= 0) continue
+
+        const tomar = Math.min(restante, lote.disponible)
+        restante = Math.round((restante - tomar) * 100) / 100
+
+        lineas.push({
+          productoId: it.productoId,
+          productoNombre: it.productoNombre,
+          unidad: it.unidad,
+          loteId: lote.id,
+          loteDate: lote.fecha,
+          loteVenc: lote.fecha_vencimiento,
+          cantidad: tomar,
+          sinLote: false,
+        })
+      }
+
+      // Si sobra cantidad (stock insuficiente en lotes) agregar línea sin lote como aviso
+      if (restante > 0) {
+        lineas.push({
+          productoId: it.productoId,
+          productoNombre: it.productoNombre,
+          unidad: it.unidad,
+          loteId: null,
+          loteDate: null,
+          loteVenc: null,
+          cantidad: restante,
+          sinLote: true,
+          sinStockEnLotes: true,
+        })
+      }
+    }
+
+    return lineas
+  }
+
+  // ── Paso 1: calcular FIFO y mostrar preview ───────────────────────────────
+  const abrirPreview = async () => {
+    if (!canSave) return
+    // Verificar stock global antes de calcular
+    for (const it of items) {
+      const prod = productos.find(p => p.id === it.productoId)
+      if (!prod || Number(prod.stock_actual) < Number(it.cantidad)) {
+        toast(`Stock insuficiente: ${prod?.nombre || 'producto seleccionado'}`, 'err')
+        return
+      }
+    }
+    setSaving(true)
+    const lineas = await calcularFIFO()
+    setSaving(false)
+    setPreviewData(lineas)
+    setModal(false)
+    setPreviewModal(true)
+  }
+
+  // ── Paso 2: confirmar y guardar ───────────────────────────────────────────
+  const save = async () => {
+    setSaving(true)
+    try {
       // Número correlativo
       const { data: seq } = await supabase
         .from('remito_secuencia').select('ultimo').eq('negocio_id', negocioId).single()
@@ -190,7 +309,7 @@ export default function Remitos() {
       }).select().single()
       if (re) throw re
 
-      // Crear remito_items
+      // Crear remito_items (uno por producto, igual que antes)
       await supabase.from('remito_items').insert(
         items.map(it => ({
           remito_id: remito.id,
@@ -206,30 +325,34 @@ export default function Remitos() {
         .update({ ultimo: nuevoNum })
         .eq('negocio_id', negocioId)
 
-      // Por cada ítem: descontar stock + crear salida vinculada al remito
-      for (const it of items) {
-        const prod = productos.find(p => p.id === it.productoId)
-        if (!prod) continue
-
-        await supabase.from('productos_terminados').update({
-          stock_actual: Math.round((Number(prod.stock_actual) - Number(it.cantidad)) * 100) / 100
-        }).eq('id', it.productoId)
-
+      // Por cada línea FIFO: insertar salida con lote_id
+      for (const linea of previewData) {
         await supabase.from('salidas_produccion').insert({
           negocio_id: negocioId,
-          producto_id: it.productoId,
-          producto_nombre: it.productoNombre,
+          producto_id: linea.productoId,
+          producto_nombre: linea.productoNombre,
           fecha: form.fecha,
-          cantidad: Number(it.cantidad),
-          unidad: it.unidad,
+          cantidad: linea.cantidad,
+          unidad: linea.unidad,
           notas: `${numero} → ${form.destino}`,
           remito_id: remito.id,
+          lote_id: linea.loteId || null,
           creado_por: usuario.id,
         })
       }
 
+      // Descontar stock_actual en productos_terminados (total por producto)
+      for (const it of items) {
+        const prod = productos.find(p => p.id === it.productoId)
+        if (!prod) continue
+        await supabase.from('productos_terminados').update({
+          stock_actual: Math.round((Number(prod.stock_actual) - Number(it.cantidad)) * 100) / 100
+        }).eq('id', it.productoId)
+      }
+
       toast(`Remito ${numero} registrado`, 'ok')
-      setModal(false)
+      setPreviewModal(false)
+      setPreviewData([])
       cargar()
     } catch (e) {
       toast(e.message || 'Error al registrar', 'err')
@@ -251,7 +374,7 @@ export default function Remitos() {
       }).eq('id', anularModal.id)
 
       for (const it of (its || [])) {
-        // Anular la salida vinculada a este remito
+        // Anular todas las salidas vinculadas a este remito (puede haber varias por lote)
         await supabase.from('salidas_produccion').update({
           anulada: true, anulada_por: usuario.id,
           anulada_en: new Date().toISOString(),
@@ -270,7 +393,7 @@ export default function Remitos() {
 
       toast('Remito anulado — stock revertido', 'ok')
       setAnularModal(null)
-      if (detalleId === anularModal.id) setDetalleId(null)
+      if (detalleId === anularModal.id) { setDetalleId(null); setDetalleLotes([]) }
       cargar()
     } catch (e) {
       toast(e.message || 'Error', 'err')
@@ -284,6 +407,21 @@ export default function Remitos() {
       .from('remito_items').select('*').eq('remito_id', remito.id)
     setPrintData({ remito, items: its || [] })
     setTriggerPrint(true)
+  }
+
+  // ── Helper vencimiento ────────────────────────────────────────────────────
+  const diasRestantes = (fechaVenc) => {
+    if (!fechaVenc) return null
+    const d = new Date(); d.setHours(0, 0, 0, 0)
+    return Math.ceil((new Date(fechaVenc) - d) / 86400000)
+  }
+
+  const badgeVenc = (fechaVenc) => {
+    const dias = diasRestantes(fechaVenc)
+    if (dias === null) return null
+    if (dias < 0)  return <Badge type="err">Vencido</Badge>
+    if (dias <= 3) return <Badge type="warn">{dias}d</Badge>
+    return <span style={{ fontSize: 11, color: '#16a34a', fontWeight: 600 }}>{dias}d</span>
   }
 
   if (cargando) return <Spinner />
@@ -321,7 +459,6 @@ export default function Remitos() {
                     background: detalleId === r.id ? '#F0EBE1' : r.anulado ? '#F9F9F7' : 'transparent',
                     opacity: r.anulado ? 0.75 : 1,
                   }}>
-                    {/* Chevron expandir */}
                     <td style={{ padding: '10px 6px 10px 14px', borderBottom: '1px solid var(--border)', width: 28 }}>
                       <button onClick={() => toggleDetalle(r)} style={{
                         background: 'none', border: 'none', cursor: 'pointer', padding: 2,
@@ -370,10 +507,11 @@ export default function Remitos() {
                           ? <div style={{ padding: '14px 48px', color: 'var(--muted)', fontSize: 13 }}>Cargando...</div>
                           : (
                             <div style={{ padding: '12px 48px 16px' }}>
+                              {/* Resumen de items */}
                               <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
                                 Contenido del remito
                               </div>
-                              <table style={{ width: '100%', maxWidth: 500, borderCollapse: 'collapse', fontSize: 13 }}>
+                              <table style={{ width: '100%', maxWidth: 500, borderCollapse: 'collapse', fontSize: 13, marginBottom: 16 }}>
                                 <thead><tr>
                                   {['Producto', 'Cantidad', 'Unidad'].map(h => (
                                     <th key={h} style={{ textAlign: 'left', padding: '6px 12px', fontSize: 10, textTransform: 'uppercase', color: 'var(--muted)', borderBottom: '1px solid var(--border)' }}>{h}</th>
@@ -389,6 +527,51 @@ export default function Remitos() {
                                   ))}
                                 </tbody>
                               </table>
+
+                              {/* Desglose por lote — solo si hay salidas con lote_id */}
+                              {detalleLotes.length > 0 && (
+                                <>
+                                  <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
+                                    Desglose por lote (FIFO)
+                                  </div>
+                                  <table style={{ width: '100%', maxWidth: 640, borderCollapse: 'collapse', fontSize: 13 }}>
+                                    <thead><tr>
+                                      {['Producto', 'Lote (fecha prod.)', 'Vencimiento', 'Cant. descontada'].map(h => (
+                                        <th key={h} style={{ textAlign: 'left', padding: '6px 12px', fontSize: 10, textTransform: 'uppercase', color: 'var(--muted)', borderBottom: '1px solid var(--border)' }}>{h}</th>
+                                      ))}
+                                    </tr></thead>
+                                    <tbody>
+                                      {detalleLotes.map(sal => {
+                                        const dias = diasRestantes(sal.lote?.fecha_vencimiento)
+                                        const rowBg = dias !== null && dias < 0 ? '#ffeaea'
+                                          : dias !== null && dias <= 3 ? '#fffbe6'
+                                          : 'transparent'
+                                        return (
+                                          <tr key={sal.id} style={{ background: rowBg }}>
+                                            <td style={{ padding: '7px 12px', fontWeight: 600 }}>{sal.producto_nombre}</td>
+                                            <td style={{ padding: '7px 12px', color: 'var(--muted)' }}>
+                                              {sal.lote?.fecha ? fFecha(sal.lote.fecha) : '—'}
+                                            </td>
+                                            <td style={{ padding: '7px 12px' }}>
+                                              {sal.lote?.fecha_vencimiento
+                                                ? <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                    <span>{fFecha(sal.lote.fecha_vencimiento)}</span>
+                                                    {badgeVenc(sal.lote.fecha_vencimiento)}
+                                                  </div>
+                                                : <span style={{ color: 'var(--muted)' }}>—</span>
+                                              }
+                                            </td>
+                                            <td style={{ padding: '7px 12px', fontWeight: 700, color: '#2D6A4F' }}>
+                                              {fNum(sal.cantidad)} {sal.unidad}
+                                            </td>
+                                          </tr>
+                                        )
+                                      })}
+                                    </tbody>
+                                  </table>
+                                </>
+                              )}
+
                               {r.notas && <p style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>Notas: {r.notas}</p>}
                             </div>
                           )
@@ -429,13 +612,32 @@ export default function Remitos() {
                 {detalleId === r.id ? '▲ Ocultar detalle' : `▼ Ver ${r.total_items} ${r.total_items === 1 ? 'producto' : 'productos'}`}
               </button>
               {detalleId === r.id && !loadingDet && (
-                <div style={{ marginTop: 8, padding: 10, background: '#F0EBE1', borderRadius: 8 }}>
-                  {detalleItems.map(it => (
-                    <div key={it.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border)' }}>
-                      <span style={{ fontSize: 13 }}>{it.producto_nombre}</span>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: '#2D6A4F' }}>{it.cantidad} {it.unidad}</span>
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ padding: 10, background: '#F0EBE1', borderRadius: 8, marginBottom: 8 }}>
+                    {detalleItems.map(it => (
+                      <div key={it.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border)' }}>
+                        <span style={{ fontSize: 13 }}>{it.producto_nombre}</span>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: '#2D6A4F' }}>{it.cantidad} {it.unidad}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {detalleLotes.length > 0 && (
+                    <div style={{ padding: 10, background: '#EAF4EE', borderRadius: 8 }}>
+                      <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: 6 }}>Desglose por lote</div>
+                      {detalleLotes.map(sal => (
+                        <div key={sal.id} style={{ padding: '5px 0', borderBottom: '1px solid var(--border)' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                            <span style={{ fontSize: 12, fontWeight: 600 }}>{sal.producto_nombre}</span>
+                            <span style={{ fontSize: 12, fontWeight: 700, color: '#2D6A4F' }}>{fNum(sal.cantidad)} {sal.unidad}</span>
+                          </div>
+                          <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
+                            Lote: {sal.lote?.fecha ? fFecha(sal.lote.fecha) : '—'}
+                            {sal.lote?.fecha_vencimiento ? ` · Vence: ${fFecha(sal.lote.fecha_vencimiento)}` : ''}
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  )}
                 </div>
               )}
               <div className="mobile-card-actions">
@@ -453,7 +655,7 @@ export default function Remitos() {
         </div>
       </Card>
 
-      {/* Modal nuevo remito */}
+      {/* Modal nuevo remito — paso 1: cargar productos y cantidades */}
       {modal && (
         <Modal title="Nuevo Remito de Salida" wide onClose={() => setModal(false)}>
           <Grid2>
@@ -518,7 +720,88 @@ export default function Remitos() {
           </FG>
           <MRow>
             <Btn v="ghost" onClick={() => setModal(false)}>Cancelar</Btn>
-            <Btn onClick={save} disabled={!canSave} loading={saving}>Confirmar remito</Btn>
+            <Btn onClick={abrirPreview} disabled={!canSave} loading={saving}>
+              Ver desglose por lote →
+            </Btn>
+          </MRow>
+        </Modal>
+      )}
+
+      {/* Modal preview FIFO — paso 2: confirmar desglose antes de guardar */}
+      {previewModal && (
+        <Modal title="Confirmar remito — desglose por lote" wide onClose={() => { setPreviewModal(false); setModal(true) }}>
+          <InfoBox type="info" style={{ marginBottom: 16 }}>
+            El sistema distribuyó la cantidad pedida entre los lotes disponibles siguiendo orden FIFO (del más antiguo al más nuevo). Revisá el desglose y confirmá.
+          </InfoBox>
+
+          {/* Agrupar líneas por producto para mostrar ordenado */}
+          {items.map(it => {
+            const lineasProd = previewData.filter(l => l.productoId === it.productoId)
+            const prod = productos.find(p => p.id === it.productoId)
+            return (
+              <div key={it.productoId} style={{ marginBottom: 20 }}>
+                <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8, color: '#1a1a1a' }}>
+                  {it.productoNombre}
+                  <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: 12, marginLeft: 8 }}>
+                    Total: {fNum(it.cantidad)} {it.unidad}
+                  </span>
+                </div>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr>
+                      {['Lote (fecha prod.)', 'Vencimiento', 'Cantidad a descontar'].map(h => (
+                        <th key={h} style={{ textAlign: 'left', padding: '6px 12px', fontSize: 10, textTransform: 'uppercase', color: 'var(--muted)', borderBottom: '1px solid var(--border)', background: '#f5f0e8' }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lineasProd.map((linea, idx) => {
+                      const dias = diasRestantes(linea.loteVenc)
+                      const rowBg = dias !== null && dias < 0 ? '#ffeaea'
+                        : dias !== null && dias <= 3 ? '#fffbe6'
+                        : 'transparent'
+                      return (
+                        <tr key={idx} style={{ background: rowBg }}>
+                          <td style={{ padding: '8px 12px', color: linea.sinLote ? '#9ca3af' : 'var(--text)' }}>
+                            {linea.sinLote
+                              ? <span style={{ fontStyle: 'italic' }}>
+                                  {linea.sinStockEnLotes ? '⚠ Sin lote disponible' : 'Sin lote registrado'}
+                                </span>
+                              : fFecha(linea.loteDate)
+                            }
+                          </td>
+                          <td style={{ padding: '8px 12px' }}>
+                            {linea.loteVenc
+                              ? <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                  <span>{fFecha(linea.loteVenc)}</span>
+                                  {badgeVenc(linea.loteVenc)}
+                                </div>
+                              : <span style={{ color: 'var(--muted)' }}>—</span>
+                            }
+                          </td>
+                          <td style={{ padding: '8px 12px', fontWeight: 700, color: linea.sinStockEnLotes ? '#BF3030' : '#2D6A4F' }}>
+                            {fNum(linea.cantidad)} {linea.unidad}
+                            {linea.sinStockEnLotes && <span style={{ fontWeight: 400, fontSize: 11, color: '#BF3030', marginLeft: 6 }}>sin lote asignado</span>}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )
+          })}
+
+          {/* Aviso si alguna línea quedó sin lote por falta de stock en lotes */}
+          {previewData.some(l => l.sinStockEnLotes) && (
+            <InfoBox type="warn" style={{ marginTop: 4, marginBottom: 16 }}>
+              ⚠ Hay unidades sin lote asignado porque el stock registrado en lotes es menor al stock total del producto. El remito igual se guardará pero esas unidades no quedarán trazadas a un lote específico.
+            </InfoBox>
+          )}
+
+          <MRow>
+            <Btn v="ghost" onClick={() => { setPreviewModal(false); setModal(true) }}>← Volver</Btn>
+            <Btn onClick={save} loading={saving}>Confirmar y guardar remito</Btn>
           </MRow>
         </Modal>
       )}
@@ -532,7 +815,6 @@ export default function Remitos() {
         />
       )}
 
-      {/* Contenido de impresión — siempre en el DOM, invisible hasta print */}
       <PrintRemito
         remito={printData.remito}
         items={printData.items}
