@@ -24,6 +24,7 @@ const PATHS = {
   download:"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3",
   history: "M12 8v4l3 3M3.05 11a9 9 0 1 0 .5-3M3 4v4h4",
   arrow:   "M5 12h14M12 5l7 7-7 7",
+  production: "M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z",
 }
 
 export const Ic = ({ n, s = 16, c = 'currentColor' }) => (
