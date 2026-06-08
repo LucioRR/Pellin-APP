@@ -741,25 +741,41 @@ export async function getOrdenes(negocioId, filtros = {}) {
 export async function checkMPParaOrden(negocioId, items) {
   if (!items || items.length === 0) return { ok: true, items: [] }
 
+  // Obtener receta_id de cada producto desde productos_terminados
   const productosIds = items.map(i => i.producto_id)
+
+  const { data: ptsData } = await supabase
+    .from('productos_terminados')
+    .select('id, receta_id')
+    .in('id', productosIds)
+
+  const recetaIdPorProducto = {}
+  for (const pt of (ptsData || [])) {
+    if (pt.receta_id) recetaIdPorProducto[pt.id] = pt.receta_id
+  }
+
+  const recetaIds = Object.values(recetaIdPorProducto).filter(Boolean)
+  if (recetaIds.length === 0) return { ok: true, items: [] }
 
   const { data: recetas, error: errR } = await supabase
     .from('recetas')
     .select(`
-      id, producto_id,
+      id,
       receta_ingredientes (
-        materia_prima_id, cantidad,
+        mp_id, cantidad,
         materias_primas ( id, nombre, stock_actual, unidad )
       )
     `)
     .eq('negocio_id', negocioId)
-    .in('producto_id', productosIds)
+    .in('id', recetaIds)
 
   if (errR) throw errR
 
+  // Mapear receta por producto_id (inverso)
   const recetaByProducto = {}
-  for (const r of (recetas || [])) {
-    recetaByProducto[r.producto_id] = r
+  for (const [productoId, recetaId] of Object.entries(recetaIdPorProducto)) {
+    const r = (recetas || []).find(x => x.id === recetaId)
+    if (r) recetaByProducto[productoId] = r
   }
 
   const mpNecesario = {}
@@ -777,7 +793,7 @@ export async function checkMPParaOrden(negocioId, items) {
 
     for (const ri of (receta.receta_ingredientes || [])) {
       const mp = ri.materias_primas
-      const necesario = ri.cantidad * item.cantidad
+      const necesario = ri.cantidad * item.cantidad_planificada
 
       if (!mpNecesario[mp.id]) {
         mpNecesario[mp.id] = {
@@ -885,12 +901,20 @@ export async function completarOrden(negocioId, userId, orden, cantidades, fecha
     const cant = Number(c.cantidad_producida)
     if (cant <= 0) continue
 
+    // Obtener receta_id desde productos_terminados (la FK está en esa tabla)
+    const { data: pt, error: errPT } = await supabase
+      .from('productos_terminados')
+      .select('receta_id, vida_util_dias')
+      .eq('id', c.producto_id)
+      .single()
+
+    if (errPT || !pt?.receta_id) continue
+
     const { data: recetas, error: errR } = await supabase
       .from('recetas')
       .select('*, ingredientes:receta_ingredientes(*)')
+      .eq('id', pt.receta_id)
       .eq('negocio_id', negocioId)
-      .eq('producto_id', c.producto_id)
-      .eq('activo', true)
       .limit(1)
 
     if (errR) throw errR
@@ -919,15 +943,9 @@ export async function completarOrden(negocioId, userId, orden, cantidades, fecha
       ? Math.round((cant / receta.rendimiento) * 10000) / 10000
       : 1
 
-    // Calcular fecha de vencimiento desde la receta/producto si tiene vida_util_dias
-    const { data: producto } = await supabase
-      .from('productos_terminados')
-      .select('vida_util_dias')
-      .eq('id', c.producto_id)
-      .single()
-
-    const fechaVencimiento = producto?.vida_util_dias
-      ? calcularFechaVencimiento(fechaLote, producto.vida_util_dias)
+    // fecha_vencimiento ya viene de pt.vida_util_dias (leído arriba)
+    const fechaVencimiento = pt.vida_util_dias
+      ? calcularFechaVencimiento(fechaLote, pt.vida_util_dias)
       : null
 
     await acciones.registrarLote({
