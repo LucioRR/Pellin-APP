@@ -350,7 +350,7 @@ function VistaLista({ ordenes, onDetalle, onIniciar, onCompletar, onCancelar }) 
               <TD>
                 {o.pedidos ? (
                   <span style={{ fontSize: 12, color: '#555' }}>
-                    Pedido #{o.pedidos.numero_pedido} — {o.pedidos.cliente_nombre}
+                    {o.pedidos.cliente_nombre}
                   </span>
                 ) : '—'}
               </TD>
@@ -506,7 +506,7 @@ function ModalCrear({ negocioId, userId, onClose, onCreated, toast, navigate, pe
   const productosOpts = productos.map(p => ({ value: p.id, label: p.nombre }))
   const pedidosOpts = [
     { value: '', label: '— Sin vincular —' },
-    ...pedidos.map(p => ({ value: p.id, label: `#${p.numero_pedido} ${p.cliente_nombre} (${fFecha(p.fecha_entrega)})` })),
+    ...pedidos.map(p => ({ value: p.id, label: `${p.cliente_nombre}${p.fecha_entrega ? ' — ' + fFecha(p.fecha_entrega) : ''}` })),
   ]
 
   const addItem = () => setItems(prev => [...prev, { producto_id: '', cantidad_planificada: '' }])

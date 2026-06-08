@@ -724,7 +724,7 @@ export async function getOrdenes(negocioId, filtros = {}) {
         id, producto_id, cantidad_planificada, cantidad_producida,
         productos_terminados ( id, nombre, unidad )
       ),
-      pedidos ( id, numero_pedido, cliente_nombre )
+      pedidos ( id, cliente_nombre )
     `)
     .eq('negocio_id', negocioId)
     .order('fecha_planificada', { ascending: false })
@@ -964,7 +964,7 @@ export async function cancelarOrden(ordenId) {
 export async function getPedidosPendientesParaOrden(negocioId) {
   const { data, error } = await supabase
     .from('pedidos')
-    .select('id, numero_pedido, cliente_nombre, fecha_entrega')
+    .select('id, cliente_nombre, fecha_entrega')
     .eq('negocio_id', negocioId)
     .in('estado', ['confirmado', 'en_preparacion'])
     .order('fecha_entrega', { ascending: true })
