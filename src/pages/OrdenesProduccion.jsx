@@ -1,6 +1,6 @@
 // src/pages/OrdenesProduccion.jsx
 import { useState, useEffect, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { useToast } from '../contexts/ToastContext'
 import { supabase, fFecha, fNum, ARS } from '../lib/supabase'
@@ -65,6 +65,7 @@ export default function OrdenesProduccion() {
   const { negocioActivo, usuario, tieneAcceso } = useAuth()
   const { toast } = useToast()
   const navigate = useNavigate()
+  const location = useLocation()
 
   const negocioId = negocioActivo?.id
 
@@ -84,6 +85,34 @@ export default function OrdenesProduccion() {
   const [modalCompletar, setModalCompletar] = useState(null)  // orden
   const [modalDeficit,   setModalDeficit]   = useState(null)  // { deficitGlobal }
 
+  // datos pre-cargados desde Pedidos (query param ?pedidoId=)
+  const [pedidoPreCargado, setPedidoPreCargado] = useState(null)
+  // { pedidoId, clienteNombre, items: [{ producto_id, cantidad_planificada }] }
+
+  // Leer query param al montar — si viene pedidoId, cargar el pedido y abrir modal
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const pedidoId = params.get('pedidoId')
+    if (!pedidoId || !negocioId) return
+
+    supabase
+      .from('pedidos')
+      .select('id, cliente_nombre, pedido_items(producto_id, cantidad_pedida)')
+      .eq('id', pedidoId)
+      .single()
+      .then(({ data, error }) => {
+        if (error || !data) return
+        const items = (data.pedido_items || []).map(it => ({
+          producto_id: it.producto_id,
+          cantidad_planificada: String(it.cantidad_pedida),
+        }))
+        setPedidoPreCargado({ pedidoId: data.id, clienteNombre: data.cliente_nombre, items })
+        setModalCrear(true)
+        // Limpiar el query param de la URL sin recargar la página
+        navigate('/ordenes-produccion', { replace: true })
+      })
+  }, [location.search, negocioId])
+
   // ── carga ────────────────────────────────────────────────────────────────
 
   const cargar = useCallback(async () => {
@@ -97,7 +126,7 @@ export default function OrdenesProduccion() {
       })
       setOrdenes(data)
     } catch (e) {
-      toast('Error cargando órdenes: ' + e.message, 'error')
+      toast('Error cargando órdenes: ' + e.message, 'err')
     } finally {
       setLoading(false)
     }
@@ -110,10 +139,10 @@ export default function OrdenesProduccion() {
   const iniciarOrden = async (orden) => {
     try {
       await updateOrdenEstado(orden.id, 'en_proceso')
-      toast('Orden iniciada', 'success')
+      toast('Orden iniciada', 'ok')
       cargar()
     } catch (e) {
-      toast(e.message, 'error')
+      toast(e.message, 'err')
     }
   }
 
@@ -121,10 +150,10 @@ export default function OrdenesProduccion() {
     if (!confirm(`¿Cancelar la orden del ${fFecha(orden.fecha_planificada)}?`)) return
     try {
       await cancelarOrden(orden.id)
-      toast('Orden cancelada', 'success')
+      toast('Orden cancelada', 'ok')
       cargar()
     } catch (e) {
-      toast(e.message, 'error')
+      toast(e.message, 'err')
     }
   }
 
@@ -244,9 +273,11 @@ export default function OrdenesProduccion() {
         <ModalCrear
           negocioId={negocioId}
           userId={usuario?.id}
-          onClose={() => setModalCrear(false)}
+          pedidoPreCargado={pedidoPreCargado}
+          onClose={() => { setModalCrear(false); setPedidoPreCargado(null) }}
           onCreated={(deficit) => {
             setModalCrear(false)
+            setPedidoPreCargado(null)
             cargar()
             if (deficit) setModalDeficit(deficit)
           }}
@@ -442,12 +473,16 @@ function VistaSemana({ diasSemana, productosSemana, getCantSemana, ordenesSemana
 
 // ─── Modal Crear ──────────────────────────────────────────────────────────────
 
-function ModalCrear({ negocioId, userId, onClose, onCreated, toast, navigate }) {
+function ModalCrear({ negocioId, userId, onClose, onCreated, toast, navigate, pedidoPreCargado }) {
   const [fecha, setFecha]         = useState(new Date().toISOString().split('T')[0])
   const [turno, setTurno]         = useState('mañana')
   const [notas, setNotas]         = useState('')
-  const [pedidoId, setPedidoId]   = useState('')
-  const [items, setItems]         = useState([{ producto_id: '', cantidad_planificada: '' }])
+  const [pedidoId, setPedidoId]   = useState(pedidoPreCargado?.pedidoId || '')
+  const [items, setItems]         = useState(
+    pedidoPreCargado?.items?.length
+      ? pedidoPreCargado.items
+      : [{ producto_id: '', cantidad_planificada: '' }]
+  )
 
   const [productos, setProductos] = useState([])
   const [pedidos, setPedidos]     = useState([])
@@ -503,8 +538,8 @@ function ModalCrear({ negocioId, userId, onClose, onCreated, toast, navigate }) 
 
   const guardar = async () => {
     const itemsValidos = items.filter(it => it.producto_id && Number(it.cantidad_planificada) > 0)
-    if (!fecha) { toast('Seleccioná una fecha', 'error'); return }
-    if (itemsValidos.length === 0) { toast('Agregá al menos un producto', 'error'); return }
+    if (!fecha) { toast('Seleccioná una fecha', 'err'); return }
+    if (itemsValidos.length === 0) { toast('Agregá al menos un producto', 'err'); return }
 
     setSaving(true)
     try {
@@ -518,19 +553,26 @@ function ModalCrear({ negocioId, userId, onClose, onCreated, toast, navigate }) 
           cantidad_planificada: Number(it.cantidad_planificada),
         })),
       })
-      toast('Orden creada', 'success')
+      toast('Orden creada', 'ok')
       // Si hay déficit, avisar
       const deficitInfo = check && !check.ok ? check.deficitGlobal : null
       onCreated(deficitInfo)
     } catch (e) {
-      toast('Error: ' + e.message, 'error')
+      toast('Error: ' + e.message, 'err')
     } finally {
       setSaving(false)
     }
   }
 
   return (
-    <Modal title="Nueva Orden de Producción" onClose={onClose} wide>
+    <Modal
+      title={pedidoPreCargado
+        ? `Nueva Orden — Pedido: ${pedidoPreCargado.clienteNombre}`
+        : 'Nueva Orden de Producción'
+      }
+      onClose={onClose}
+      wide
+    >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
 
         {/* Datos básicos */}
@@ -738,14 +780,14 @@ function ModalCompletar({ orden, negocioId, userId, onClose, onDone, toast }) {
   )
 
   const handleCompletar = async () => {
-    if (!fechaLote) { toast('Ingresá la fecha del lote', 'error'); return }
+    if (!fechaLote) { toast('Ingresá la fecha del lote', 'err'); return }
     setSaving(true)
     try {
       await completarOrden(negocioId, userId, orden, cantidades, fechaLote)
-      toast('Orden completada. Lotes creados en Producción.', 'success')
+      toast('Orden completada. Lotes creados en Producción.', 'ok')
       onDone()
     } catch (e) {
-      toast('Error: ' + e.message, 'error')
+      toast('Error: ' + e.message, 'err')
     } finally {
       setSaving(false)
     }

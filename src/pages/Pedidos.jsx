@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useAuth }  from '../contexts/AuthContext'
 import { useToast } from '../contexts/ToastContext'
 import { supabase, fFecha, fNum } from '../lib/supabase'
@@ -287,7 +288,7 @@ function ModalDetalle({ pedido, stockInfo, loading, onClose, onAvanzar, onCancel
               <Ic n="ban" s={14} c="#fff" /> Cancelar pedido
             </Btn>
             {siguiente && (
-              <Btn v={esDespachar ? 'success' : 'primary'} onClick={onAvanzar} loading={loading}>
+              <Btn v={esDespachar ? 'ok' : 'primary'} onClick={onAvanzar} loading={loading}>
                 {esDespachar
                   ? <><Ic n="arrow" s={14} c="#fff" /> Despachar y generar Remito</>
                   : `✓ Marcar como ${LABELS[siguiente]}`}
@@ -308,7 +309,8 @@ function ModalDetalle({ pedido, stockInfo, loading, onClose, onAvanzar, onCancel
 
 export default function Pedidos() {
   const { usuario, negocioActivo, tieneAcceso } = useAuth()
-  const { toast } = useToast()
+  const { toast }    = useToast()
+  const navigate     = useNavigate()
 
   const [pedidos,       setPedidos]       = useState([])
   const [stockMap,      setStockMap]      = useState({})
@@ -389,7 +391,7 @@ export default function Pedidos() {
       )
       setStockMap(nuevoMap)
     } catch (e) {
-      toast('Error al cargar pedidos: ' + e.message, 'error')
+      toast('Error al cargar pedidos: ' + e.message, 'err')
     } finally {
       setLoading(false)
     }
@@ -401,10 +403,10 @@ export default function Pedidos() {
 
   async function handleCrear(form) {
     if (!form.clienteNombre.trim())
-      return toast('Ingresá el nombre del cliente', 'error')
+      return toast('Ingresá el nombre del cliente', 'err')
     const itemsValidos = form.items.filter(i => i.productoId && Number(i.cantidad) > 0)
     if (!itemsValidos.length)
-      return toast('Agregá al menos un producto con cantidad', 'error')
+      return toast('Agregá al menos un producto con cantidad', 'err')
 
     setLoadingAccion(true)
     try {
@@ -419,10 +421,10 @@ export default function Pedidos() {
         usuario.id
       )
       setModalCrear(false)
-      toast('Pedido creado correctamente', 'success')
+      toast('Pedido creado correctamente', 'ok')
       cargarPedidos()
     } catch (e) {
-      toast('Error al crear pedido: ' + e.message, 'error')
+      toast('Error al crear pedido: ' + e.message, 'err')
     } finally {
       setLoadingAccion(false)
     }
@@ -442,11 +444,11 @@ export default function Pedidos() {
       setLoadingAccion(true)
       try {
         const { numeroFormateado } = await despacharPedido(pedido.id, negocioActivo.id, usuario.id)
-        toast(`✓ Pedido despachado. Remito ${numeroFormateado} generado.`, 'success')
+        toast(`✓ Pedido despachado. Remito ${numeroFormateado} generado.`, 'ok')
         setPedidoDetalle(null)
         cargarPedidos()
       } catch (e) {
-        toast('Error al despachar: ' + e.message, 'error')
+        toast('Error al despachar: ' + e.message, 'err')
       } finally {
         setLoadingAccion(false)
       }
@@ -457,11 +459,11 @@ export default function Pedidos() {
     setLoadingAccion(true)
     try {
       await updateEstadoPedido(pedido.id, siguiente)
-      toast(`Pedido actualizado: ${LABELS[siguiente]}`, 'success')
+      toast(`Pedido actualizado: ${LABELS[siguiente]}`, 'ok')
       setPedidoDetalle(null)
       cargarPedidos()
     } catch (e) {
-      toast('Error: ' + e.message, 'error')
+      toast('Error: ' + e.message, 'err')
     } finally {
       setLoadingAccion(false)
     }
@@ -472,18 +474,22 @@ export default function Pedidos() {
     setLoadingAccion(true)
     try {
       await updateEstadoPedido(pedido.id, 'cancelado')
-      toast('Pedido cancelado', 'success')
+      toast('Pedido cancelado', 'ok')
       setPedidoDetalle(null)
       cargarPedidos()
     } catch (e) {
-      toast('Error: ' + e.message, 'error')
+      toast('Error: ' + e.message, 'err')
     } finally {
       setLoadingAccion(false)
     }
   }
 
   function handleCrearOrden() {
-    toast('Módulo Órdenes de Producción disponible en Chat 3', 'info')
+    // Navegar a Órdenes pasando el ID del pedido como query param
+    // OrdenesProduccion.jsx lo lee y pre-carga el formulario automáticamente
+    const id = pedidoDetalle?.id
+    setPedidoDetalle(null)
+    navigate('/ordenes-produccion' + (id ? '?pedidoId=' + id : ''))
   }
 
   // ── Datos derivados ───────────────────────────────────────────────────────
