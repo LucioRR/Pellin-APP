@@ -18,18 +18,27 @@ import OrdenesProduccion from './OrdenesProduccion'
 
 
 const NAV = [
-  { id:'dashboard',    label:'Panel',           icon:'dash',   path:'/' },
-  { id:'materias',     label:'Materias Primas', icon:'box',    path:'/materias' },
-  { id:'proveedores',  label:'Proveedores',     icon:'users',  path:'/proveedores' },
-  { id:'compras',      label:'Compras',         icon:'cart',   path:'/compras' },
-  { id:'produccion',   label:'Producción',      icon:'flask',  path:'/produccion' },
-  { id: 'ordenes_produccion', label:'Órdenes Producción', icon:'production', path: '/ordenes-produccion'},
-  { id:'productos',    label:'Prod. Terminados',icon:'pkg',    path:'/productos' },
-  { id:'remitos',      label:'Remitos',         icon:'arrow',  path:'/remitos' },
-  { id:'pedidos', label:'Pedidos',         icon:'arrow',  path:'/pedidos' },
-  { id:'caja',         label:'Caja',            icon:'wallet', path:'/caja' },
-  { id:'estadisticas', label:'Estadísticas',    icon:'chart',  path:'/estadisticas' },
-  { id:'configuracion',label:'Configuración',   icon:'cog',    path:'/configuracion' },
+  // ── Vista general ─────────────────────────────
+  { id:'dashboard',          label:'Panel',             icon:'dash',       path:'/' },
+
+  // ── Ciclo de compras (insumos entran) ─────────
+  { id:'proveedores',        label:'Proveedores',       icon:'users',      path:'/proveedores' },
+  { id:'materias',           label:'Materias Primas',   icon:'box',        path:'/materias' },
+  { id:'compras',            label:'Compras',           icon:'cart',       path:'/compras' },
+
+  // ── Ciclo de producción (se transforma) ───────
+  { id:'ordenes_produccion', label:'Órdenes Producción',icon:'production', path:'/ordenes-produccion' },
+  { id:'produccion',         label:'Producción',        icon:'flask',      path:'/produccion' },
+  { id:'productos',          label:'Prod. Terminados',  icon:'pkg',        path:'/productos' },
+
+  // ── Ciclo de ventas (producto sale) ───────────
+  { id:'pedidos',            label:'Pedidos',           icon:'arrow',      path:'/pedidos' },
+  { id:'remitos',            label:'Remitos',           icon:'download',   path:'/remitos' },
+
+  // ── Finanzas y gestión ────────────────────────
+  { id:'caja',               label:'Caja',              icon:'wallet',     path:'/caja' },
+  { id:'estadisticas',       label:'Estadísticas',      icon:'chart',      path:'/estadisticas' },
+  { id:'configuracion',      label:'Configuración',     icon:'cog',        path:'/configuracion' },
 ]
 
 export default function AppShell() {
