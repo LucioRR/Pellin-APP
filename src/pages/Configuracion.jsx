@@ -8,6 +8,7 @@ import { getPrintConfig, setPrintConfig, probarConexionQZ } from '../lib/usePrin
 
 const MODULOS = [
   { id: 'dashboard', label: 'Panel General' },
+  { id: 'dashboard_operativo', label: 'Panel del día' },
   { id: 'materias', label: 'Materias Primas' },
   { id: 'proveedores', label: 'Proveedores' },
   { id: 'compras', label: 'Compras' },

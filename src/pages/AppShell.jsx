@@ -15,11 +15,13 @@ import Estadisticas   from './Estadisticas'
 import Configuracion  from './Configuracion'
 import Pedidos        from './Pedidos'
 import OrdenesProduccion from './OrdenesProduccion'
+import DashboardOperativo from './pages/DashboardOperativo'
 
 
 const NAV = [
   // ── Vista general ─────────────────────────────
   { id:'dashboard',          label:'Panel',             icon:'dash',       path:'/' },
+  { id:'dashboard_operativo', label:'Panel del día', icon:'dash', path:'/dashboard-operativo' },
 
   // ── Ciclo de compras (insumos entran) ─────────
   { id:'proveedores',        label:'Proveedores',       icon:'users',      path:'/proveedores' },
@@ -157,6 +159,7 @@ export default function AppShell() {
           <div className="page-content" style={{ padding:'28px 30px' }}>
             <Routes>
               <Route path="/"              element={<Dashboard />} />
+              <Route path="/dashboard-operativo" element={<DashboardOperativo />} />
               <Route path="/materias"      element={<MateriasPrimas />} />
               <Route path="/proveedores"   element={<Proveedores />} />
               <Route path="/compras"       element={<Compras />} />
