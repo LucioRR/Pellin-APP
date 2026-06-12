@@ -3,7 +3,8 @@ import { supabase } from '../lib/supabase'
 import { useNegocio } from '../lib/negocio'
 import { useAuth } from '../contexts/AuthContext'
 import { useToast } from '../contexts/ToastContext'
-import { PageHeader, Card, Btn, BtnSm, Badge, Modal, FG, Grid2, Inp, Sel, Tabs, MRow, Spinner, TH, TD, EmptyRow, Ic } from '../components/UI'
+import { PageHeader, Card, Btn, BtnSm, Badge, Modal, FG, Grid2, Inp, Sel, Tabs, MRow, Spinner, TH, TD, EmptyRow, Ic, InfoBox } from '../components/UI'
+import { getPrintConfig, setPrintConfig, probarConexionQZ } from '../lib/usePrintLabel'
 
 const MODULOS = [
   { id: 'dashboard', label: 'Panel General' },
@@ -34,6 +35,11 @@ export default function Configuracion() {
   const [negForm, setNegForm] = useState({ nombre: '', tipo: 'generico' })
   const [usuForm, setUsuForm] = useState({ rol: 'operario', negocio_ids: [], modulos: [] })
   const [catForm, setCatForm] = useState({ tipo: 'ingreso', nombre: '' })
+
+  // ── Estado impresora ────────────────────────────────────────────────────────
+  const [printCfg, setPrintCfg] = useState(() => getPrintConfig())
+  const [testResult, setTestResult] = useState(null)  // null | { ok, printer?, error? }
+  const [testing, setTesting] = useState(false)
 
   useEffect(() => { if (esAdmin) cargar() }, [negocioId])
 
@@ -68,7 +74,6 @@ export default function Configuracion() {
   const toggleNeg = (id) => setUsuForm(f => ({ ...f, negocio_ids: f.negocio_ids.includes(id) ? f.negocio_ids.filter(x => x !== id) : [...f.negocio_ids, id] }))
   const toggleMod = (id) => setUsuForm(f => ({ ...f, modulos: f.modulos.includes(id) ? f.modulos.filter(x => x !== id) : [...f.modulos, id] }))
   const saveUsu = async () => {
-    // Protección: no podés cambiar tu propio rol ni quitarte el módulo de configuración
     const esPropio = usuModal.id === usuario.id
     if (esPropio && usuForm.rol !== 'admin') {
       toast('No podés cambiar tu propio rol de administrador', 'warn')
@@ -78,7 +83,6 @@ export default function Configuracion() {
       toast('No podés quitarte el acceso a todos los negocios', 'warn')
       return
     }
-    // Protección: debe quedar al menos un admin en el sistema
     if (usuForm.rol !== 'admin') {
       const otrosAdmins = usuarios.filter(u => u.id !== usuModal.id && u.rol === 'admin')
       if (otrosAdmins.length === 0) {
@@ -86,7 +90,6 @@ export default function Configuracion() {
         return
       }
     }
-    // Si es admin, siempre guardar con todos los módulos (el rol define el acceso)
     const modulosFinales = usuForm.rol === 'admin'
       ? MODULOS.map(m => m.id)
       : usuForm.modulos
@@ -130,14 +133,37 @@ export default function Configuracion() {
     toast(c.activa ? 'Categoría desactivada' : 'Categoría activada', 'ok'); cargar()
   }
 
+  // ── Impresora ───────────────────────────────────────────────────────────────
+  const savePrintCfg = () => {
+    setPrintConfig(printCfg)
+    toast('Configuración de impresora guardada', 'ok')
+  }
+
+  const testConexion = async () => {
+    setTesting(true)
+    setTestResult(null)
+    const result = await probarConexionQZ()
+    setTestResult(result)
+    setTesting(false)
+  }
+
   if (!esAdmin) return <div style={{ padding: 40, color: 'var(--muted)', fontSize: 15 }}>Solo los administradores pueden acceder a la configuración.</div>
   if (cargando) return <Spinner />
 
   return (
     <div>
-      <PageHeader title="Configuración" sub="Negocios, usuarios y categorías de caja" />
+      <PageHeader title="Configuración" sub="Negocios, usuarios, categorías e impresora" />
 
-      <Tabs tabs={[['negocios', 'Negocios'], ['usuarios', 'Usuarios'], ['categorias', 'Categorías de Caja']]} active={tab} onChange={setTab} />
+      <Tabs
+        tabs={[
+          ['negocios', 'Negocios'],
+          ['usuarios', 'Usuarios'],
+          ['categorias', 'Categorías de Caja'],
+          ['impresora', 'Impresora'],
+        ]}
+        active={tab}
+        onChange={setTab}
+      />
 
       {/* Negocios */}
       {tab === 'negocios' && (
@@ -227,6 +253,98 @@ export default function Configuracion() {
               </Card>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* ── IMPRESORA ─────────────────────────────────────────────────────────── */}
+      {tab === 'impresora' && (
+        <div style={{ maxWidth: 560 }}>
+
+          {/* Instrucciones QZ Tray */}
+          <InfoBox type="info">
+            <strong>Requisito:</strong> Esta función requiere <strong>QZ Tray</strong> instalado y corriendo en la PC que tiene la impresora conectada.{' '}
+            <a href="https://qz.io/download/" target="_blank" rel="noreferrer"
+              style={{ color: '#1A56DB', fontWeight: 600 }}>
+              Descargar QZ Tray →
+            </a>
+            <div style={{ marginTop: 6, fontSize: 12 }}>
+              Una vez instalado, QZ Tray corre en segundo plano (ícono en la bandeja del sistema). No es necesario configurar nada en QZ Tray — solo tenerlo activo.
+            </div>
+          </InfoBox>
+
+          <Card pad style={{ marginTop: 16 }}>
+            <h3 style={{ fontFamily: 'var(--font-head)', fontSize: 16, fontWeight: 700, margin: '0 0 18px' }}>
+              Impresora de etiquetas
+            </h3>
+
+            <FG label="Nombre de la impresora (opcional)">
+              <Inp
+                value={printCfg.printerName || ''}
+                onChange={e => setPrintCfg(c => ({ ...c, printerName: e.target.value }))}
+                placeholder="Ej: 3nStar LTT334 — dejar vacío para usar la impresora por defecto"
+              />
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>
+                El nombre debe coincidir exactamente con el nombre de la impresora en Windows. Si está vacío, se usará la impresora predeterminada del sistema.
+              </div>
+            </FG>
+
+            <FG label="Tamaño de etiqueta por defecto">
+              <Sel
+                value={printCfg.labelSize || '100x50'}
+                onChange={e => setPrintCfg(c => ({ ...c, labelSize: e.target.value }))}
+              >
+                <option value="100x50">100 × 50 mm — estándar (recomendado)</option>
+                <option value="57x32">57 × 32 mm — pequeña</option>
+              </Sel>
+            </FG>
+
+            {/* Test de conexión */}
+            <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16, marginTop: 4 }}>
+              <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>
+                Verificá que QZ Tray esté corriendo antes de probar la conexión.
+              </div>
+
+              {testResult && (
+                <InfoBox type={testResult.ok ? 'ok' : 'err'} style={{ marginBottom: 12 }}>
+                  {testResult.ok
+                    ? <>✓ Conexión exitosa — Impresora detectada: <strong>{testResult.printer}</strong></>
+                    : <>✗ {testResult.error}</>
+                  }
+                </InfoBox>
+              )}
+
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                <Btn v="ghost" onClick={testConexion} loading={testing}>
+                  <Ic n="check" s={14} /> Probar conexión
+                </Btn>
+                <Btn onClick={savePrintCfg}>
+                  <Ic n="download" s={14} c="#fff" /> Guardar configuración
+                </Btn>
+              </div>
+            </div>
+          </Card>
+
+          {/* Instrucciones de instalación del script */}
+          <Card pad style={{ marginTop: 16 }}>
+            <h3 style={{ fontFamily: 'var(--font-head)', fontSize: 15, fontWeight: 700, margin: '0 0 12px' }}>
+              Configuración de QZ Tray en el proyecto
+            </h3>
+            <div style={{ fontSize: 13, color: '#4A4437', lineHeight: 1.6 }}>
+              <p style={{ margin: '0 0 10px' }}>
+                Agregá este script al final del <code style={{ background: '#EAE5DC', padding: '1px 5px', borderRadius: 4 }}>&lt;body&gt;</code> en <code style={{ background: '#EAE5DC', padding: '1px 5px', borderRadius: 4 }}>index.html</code>:
+              </p>
+              <div style={{
+                background: '#1A1A18', color: '#A8E6CF', borderRadius: 8,
+                padding: '12px 14px', fontFamily: 'monospace', fontSize: 12,
+                lineHeight: 1.7, overflowX: 'auto',
+              }}>
+                {'<script src="https://cdn.qz.io/qz-tray/2.2.4/q z-tray.js"></script>'.replace(' z', 'z')}
+              </div>
+              <p style={{ margin: '10px 0 0', fontSize: 12, color: 'var(--muted)' }}>
+                Este script habilita la comunicación entre la app y QZ Tray. No requiere instalación adicional en el servidor — solo en la PC que tiene la impresora.
+              </p>
+            </div>
+          </Card>
         </div>
       )}
 

@@ -5,6 +5,7 @@ import { useToast } from '../contexts/ToastContext'
 import { useAuth } from '../contexts/AuthContext'
 import { PageHeader, Card, Btn, BtnSm, Badge, Modal, AnularModal, FG, Grid2, Inp, Sel, Tabs, MRow, Spinner, TH, TD, EmptyRow, InfoBox, Ic } from '../components/UI'
 import SearchableSelect from '../components/SearchableSelect'
+import PrintLabel from '../components/PrintLabel'
 
 export default function Produccion() {
   const { negocioId } = useNegocio()
@@ -14,12 +15,13 @@ export default function Produccion() {
   const [lotes, setLotes] = useState([])
   const [recetas, setRecetas] = useState([])
   const [materias, setMaterias] = useState([])
-  // FIX: un solo useState para productos, incluyendo vida_util_dias
   const [productos, setProductos] = useState([])
   const [cargando, setCargando] = useState(true)
   const [loteModal, setLoteModal] = useState(false)
   const [recetaModal, setRecetaModal] = useState(null)
   const [anularModal, setAnularModal] = useState(null)
+  // NUEVO: lote seleccionado para imprimir etiquetas
+  const [printModal, setPrintModal] = useState(null)
   const [saving, setSaving] = useState(false)
   const [loteForm, setLoteForm] = useState({ recetaId: '', productoId: '', fecha: hoy(), cantBatches: '1', notas: '' })
   const [rForm, setRForm] = useState({ nombre: '', rendimiento: '', unidad_rendimiento: 'kg' })
@@ -32,11 +34,9 @@ export default function Produccion() {
   const cargar = async () => {
     setCargando(true)
     const [{ data: ls }, { data: rs }, { data: ms }, { data: ps }] = await Promise.all([
-      // FIX: incluir fecha_vencimiento en el SELECT de lotes
       supabase.from('lotes').select('*, creadoPor:creado_por(nombre), anuladoPor:anulado_por(nombre)').eq('negocio_id', negocioId).order('fecha', { ascending: false }),
       supabase.from('recetas').select('*, ingredientes:receta_ingredientes(*)').eq('negocio_id', negocioId).eq('activo', true).order('nombre'),
       supabase.from('materias_primas').select('id,nombre,unidad,precio_costo,stock_actual').eq('negocio_id', negocioId).eq('activo', true).order('nombre'),
-      // FIX: una sola carga de productos con vida_util_dias incluido
       supabase.from('productos_terminados').select('id,nombre,unidad,vida_util_dias').eq('negocio_id', negocioId).eq('activo', true).order('nombre'),
     ])
     setLotes(ls || [])
@@ -47,7 +47,6 @@ export default function Produccion() {
     setCargando(false)
   }
 
-  // Calcula fecha_vencimiento cuando cambia el producto o la fecha del lote
   useEffect(() => {
     if (!loteForm.productoId || !loteForm.fecha) {
       setFechaVencCalculada(null)
@@ -63,7 +62,6 @@ export default function Produccion() {
     }
   }, [loteForm.productoId, loteForm.fecha, productos])
 
-  // Helper días restantes hasta vencimiento
   const diasRestantes = (fechaVenc) => {
     if (!fechaVenc) return null
     const d = new Date()
@@ -71,7 +69,6 @@ export default function Produccion() {
     return Math.ceil((new Date(fechaVenc) - d) / (1000 * 60 * 60 * 24))
   }
 
-  // Lote
   const recSel = recetas.find(r => r.id === loteForm.recetaId)
   const cantB = Number(loteForm.cantBatches) || 0
   const preview = recSel ? recSel.ingredientes.map(ing => {
@@ -112,7 +109,6 @@ export default function Produccion() {
         cantBatches: cantB,
         receta: recetaConPrecios,
         notas: loteForm.notas,
-        // NUEVO: fecha de vencimiento calculada
         fechaVencimiento: fechaVencCalculada || null,
       })
       toast('Lote registrado — stock actualizado', 'ok')
@@ -137,7 +133,6 @@ export default function Produccion() {
     setSaving(false)
   }
 
-  // Receta
   const updateIng = (i, k, v) => {
     if (k === 'mpId') {
       const mp = materias.find(m => m.id === v)
@@ -179,7 +174,6 @@ export default function Produccion() {
     setSaving(false)
   }
 
-  // Filtrado de lotes por estado de vencimiento
   const lotesFiltrados = lotes.filter(l => {
     if (filtroVenc === 'todos') return true
     const d = diasRestantes(l.fecha_vencimiento)
@@ -206,7 +200,6 @@ export default function Produccion() {
         <Card>
           {recetas.length === 0 && <InfoBox type="warn" style={{ margin: 16 }}>Creá al menos una receta para poder registrar lotes.</InfoBox>}
 
-          {/* Filtro de vencimiento */}
           <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
             <Sel
               value={filtroVenc}
@@ -266,10 +259,25 @@ export default function Produccion() {
                         : <Badge type="ok">Activo</Badge>
                       }
                     </TD>
+                    {/* NUEVO: acciones por lote */}
                     <td style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
-                      {!l.anulado && esAdmin && (
-                        <BtnSm v="danger" onClick={() => setAnularModal(l)} title="Anular lote"><Ic n="ban" s={12} c="#BF3030" /></BtnSm>
-                      )}
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        {/* Botón imprimir — disponible para lotes activos */}
+                        {!l.anulado && (
+                          <BtnSm
+                            v="ghost"
+                            onClick={() => setPrintModal(l)}
+                            title="Imprimir etiquetas"
+                          >
+                            🖨️
+                          </BtnSm>
+                        )}
+                        {!l.anulado && esAdmin && (
+                          <BtnSm v="danger" onClick={() => setAnularModal(l)} title="Anular lote">
+                            <Ic n="ban" s={12} c="#BF3030" />
+                          </BtnSm>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 )
@@ -318,7 +326,7 @@ export default function Produccion() {
         </div>
       )}
 
-      {/* Modal lote */}
+      {/* Modal registrar lote */}
       {loteModal && (
         <Modal title="Registrar Lote de Producción" onClose={() => setLoteModal(false)}>
           <Grid2>
@@ -343,7 +351,6 @@ export default function Produccion() {
             </FG>
           </Grid2>
 
-          {/* Fecha de vencimiento calculada automáticamente */}
           {loteForm.productoId && (
             <div style={{ marginBottom: 12 }}>
               {fechaVencCalculada
@@ -438,7 +445,23 @@ export default function Produccion() {
         </Modal>
       )}
 
-      {anularModal && <AnularModal titulo={`Lote — ${anularModal.receta_nombre}`} onConfirm={anularLote} onClose={() => setAnularModal(null)} loading={saving} />}
+      {/* Modal anular */}
+      {anularModal && (
+        <AnularModal
+          titulo={`Lote — ${anularModal.receta_nombre}`}
+          onConfirm={anularLote}
+          onClose={() => setAnularModal(null)}
+          loading={saving}
+        />
+      )}
+
+      {/* NUEVO: Modal imprimir etiquetas */}
+      {printModal && (
+        <PrintLabel
+          lote={printModal}
+          onClose={() => setPrintModal(null)}
+        />
+      )}
     </div>
   )
 }
