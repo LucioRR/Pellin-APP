@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { db, fFecha, hoy } from '../lib/supabase'
+import { supabase, fFecha, hoy } from '../lib/supabase'
 import { useNegocio } from '../lib/negocio'
 import { useToast } from '../contexts/ToastContext'
 import {
@@ -101,7 +101,7 @@ function PedidosHoy({ negocioId }) {
       setCargando(true)
       try {
         // Traer pedidos con fecha_entrega = hoy
-        const { data: pedData, error: pedErr } = await db.pedidos
+        const { data: pedData, error: pedErr } = await supabase.from('pedidos')
           .select('id, cliente_nombre, fecha_entrega, estado, created_at')
           .eq('negocio_id', negocioId)
           .eq('fecha_entrega', hoy())
@@ -114,7 +114,7 @@ function PedidosHoy({ negocioId }) {
 
         // Traer items de esos pedidos
         const ids = pedData.map(p => p.id)
-        const { data: itemsData, error: itemsErr } = await db.pedido_items
+        const { data: itemsData, error: itemsErr } = await supabase.from('pedido_items')
           .select('pedido_id, producto_id, producto_nombre, cantidad')
           .in('pedido_id', ids)
 
@@ -124,7 +124,7 @@ function PedidosHoy({ negocioId }) {
         const productoIds = [...new Set((itemsData || []).map(i => i.producto_id))]
         let stockMap = {}
         if (productoIds.length) {
-          const { data: ptData } = await db.productos_terminados
+          const { data: ptData } = await supabase.from('productos_terminados')
             .select('id, stock_actual, stock_minimo')
             .in('id', productoIds)
           ;(ptData || []).forEach(p => { stockMap[p.id] = p })
@@ -244,7 +244,7 @@ function ProduccionPlanificada({ negocioId }) {
     const cargar = async () => {
       setCargando(true)
       try {
-        const { data, error } = await db.ordenes_produccion
+        const { data, error } = await supabase.from('ordenes_produccion')
           .select('id, numero_orden, receta_nombre, producto_nombre, cantidad_batches, estado, prioridad, receta_id')
           .eq('negocio_id', negocioId)
           .eq('fecha_planificada', hoy())
@@ -256,14 +256,14 @@ function ProduccionPlanificada({ negocioId }) {
 
         // Verificar stock de MP para cada receta
         const recetaIds = [...new Set(data.map(o => o.receta_id))]
-        const { data: ingredientes } = await db.receta_ingredientes
+        const { data: ingredientes } = await supabase.from('receta_ingredientes')
           .select('receta_id, mp_id, cantidad')
           .in('receta_id', recetaIds)
 
         const mpIds = [...new Set((ingredientes || []).map(i => i.mp_id))]
         let mpStock = {}
         if (mpIds.length) {
-          const { data: mps } = await db.materias_primas
+          const { data: mps } = await supabase.from('materias_primas')
             .select('id, stock_actual')
             .in('id', mpIds)
           ;(mps || []).forEach(mp => { mpStock[mp.id] = mp.stock_actual })
@@ -361,7 +361,7 @@ function AlertasVencimiento({ negocioId }) {
         limite.setDate(limite.getDate() + 3)
         const limitStr = limite.toISOString().split('T')[0]
 
-        const { data, error } = await db.lotes
+        const { data, error } = await supabase.from('lotes')
           .select('id, receta_nombre, total_producido, unidad, fecha, fecha_vencimiento')
           .eq('negocio_id', negocioId)
           .eq('anulado', false)
@@ -450,18 +450,8 @@ function StockCritico({ negocioId }) {
     const cargar = async () => {
       setCargando(true)
       try {
-        const { data, error } = await db.productos_terminados
-          .select('id, nombre, unidad, stock_actual, stock_minimo')
-          .eq('negocio_id', negocioId)
-          .eq('activo', true)
-          .lte('stock_actual', db.productos_terminados.raw?.('stock_minimo') ?? 999999)
-
-        // Filtramos en JS porque la comparación de columnas no es directa en Supabase
-        // Haremos la query sin filtro de columna y filtramos client-side
-        if (error) throw error
-
-        // Re-query sin el filtro complejo
-        const { data: todos, error: e2 } = await db.productos_terminados
+        // Supabase no permite comparar dos columnas entre sí — filtramos client-side
+        const { data: todos, error: e2 } = await supabase.from('productos_terminados')
           .select('id, nombre, unidad, stock_actual, stock_minimo')
           .eq('negocio_id', negocioId)
           .eq('activo', true)

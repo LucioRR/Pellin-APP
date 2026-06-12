@@ -15,7 +15,7 @@ import Estadisticas   from './Estadisticas'
 import Configuracion  from './Configuracion'
 import Pedidos        from './Pedidos'
 import OrdenesProduccion from './OrdenesProduccion'
-import DashboardOperativo from './pages/DashboardOperativo'
+import DashboardOperativo from './DashboardOperativo'
 
 
 const NAV = [
