@@ -33,6 +33,11 @@ const ESTADOS = [
 
 const TURNOS = ['mañana', 'tarde', 'noche']
 
+const PRIORIDADES = [
+  { value: 'normal',  label: 'Normal' },
+  { value: 'urgente', label: 'Urgente' },
+]
+
 function estadoBadge(estado) {
   const map = {
     planificada: 'gray',
@@ -323,21 +328,31 @@ function VistaLista({ ordenes, onDetalle, onIniciar, onCompletar, onCancelar }) 
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead>
           <tr>
+            <TH>N°</TH>
             <TH>Fecha</TH>
             <TH>Turno</TH>
             <TH>Estado</TH>
+            <TH>Prioridad</TH>
             <TH>Productos</TH>
             <TH>Vinculado a pedido</TH>
             <TH>Acciones</TH>
           </tr>
         </thead>
         <tbody>
-          {ordenes.length === 0 && <EmptyRow cols={6} msg="No hay órdenes" />}
+          {ordenes.length === 0 && <EmptyRow cols={8} msg="No hay órdenes" />}
           {ordenes.map(o => (
             <tr key={o.id}>
+              <TD style={{ fontWeight: 600, color: '#555', whiteSpace: 'nowrap' }}>
+                {o.numero_orden ? `#${o.numero_orden}` : '—'}
+              </TD>
               <TD>{fFecha(o.fecha_planificada)}</TD>
               <TD style={{ textTransform: 'capitalize' }}>{o.turno}</TD>
               <TD>{estadoBadge(o.estado)}</TD>
+              <TD>
+                {o.prioridad === 'urgente'
+                  ? <Badge type="err">Urgente</Badge>
+                  : <span style={{ color: '#9CA3AF', fontSize: 13 }}>Normal</span>}
+              </TD>
               <TD>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                   {(o.ordenes_produccion_items || []).map(it => (
@@ -478,6 +493,7 @@ function ModalCrear({ negocioId, userId, onClose, onCreated, toast, navigate, pe
   const [turno, setTurno]         = useState('mañana')
   const [notas, setNotas]         = useState('')
   const [pedidoId, setPedidoId]   = useState(pedidoPreCargado?.pedidoId || '')
+  const [prioridad, setPrioridad] = useState('normal')
   const [items, setItems]         = useState(
     pedidoPreCargado?.items?.length
       ? pedidoPreCargado.items
@@ -546,6 +562,7 @@ function ModalCrear({ negocioId, userId, onClose, onCreated, toast, navigate, pe
       await createOrden(negocioId, userId, {
         fecha_planificada: fecha,
         turno,
+        prioridad,
         notas,
         pedido_id: pedidoId || null,
         items: itemsValidos.map(it => ({
@@ -576,7 +593,7 @@ function ModalCrear({ negocioId, userId, onClose, onCreated, toast, navigate, pe
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
 
         {/* Datos básicos */}
-        <Grid2>
+        <Grid3>
           <FG label="Fecha planificada">
             <Inp type="date" value={fecha} onChange={e => setFecha(e.target.value)} />
           </FG>
@@ -585,7 +602,12 @@ function ModalCrear({ negocioId, userId, onClose, onCreated, toast, navigate, pe
               {TURNOS.map(t => <option key={t} value={t} style={{ textTransform: 'capitalize' }}>{t}</option>)}
             </Sel>
           </FG>
-        </Grid2>
+          <FG label="Prioridad">
+            <Sel value={prioridad} onChange={e => setPrioridad(e.target.value)}>
+              {PRIORIDADES.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+            </Sel>
+          </FG>
+        </Grid3>
 
         <FG label="Vincular a pedido (opcional)">
           <SearchableSelect
@@ -695,7 +717,7 @@ function ModalCrear({ negocioId, userId, onClose, onCreated, toast, navigate, pe
 
 function ModalDetalle({ orden, onClose }) {
   return (
-    <Modal title={`Orden — ${fFecha(orden.fecha_planificada)} (${orden.turno})`} onClose={onClose} wide>
+    <Modal title={`Orden ${orden.numero_orden ? '#' + orden.numero_orden + ' — ' : '— '}${fFecha(orden.fecha_planificada)} (${orden.turno})`} onClose={onClose} wide>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
           <div><strong>Estado:</strong> {estadoBadge(orden.estado)}</div>

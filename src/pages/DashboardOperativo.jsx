@@ -244,49 +244,49 @@ function ProduccionPlanificada({ negocioId }) {
     const cargar = async () => {
       setCargando(true)
       try {
-        const { data, error } = await supabase.from('ordenes_produccion')
-          .select('id, numero_orden, receta_nombre, producto_nombre, cantidad_batches, estado, prioridad, receta_id')
+        const { data, error } = await supabase
+          .from('ordenes_produccion')
+          .select('id, fecha_planificada, turno, estado, notas, pedido_id, numero_orden, prioridad')
           .eq('negocio_id', negocioId)
           .eq('fecha_planificada', hoy())
           .in('estado', ['pendiente', 'en_proceso'])
-          .order('prioridad', { ascending: false })
+          .order('created_at', { ascending: true })
 
         if (error) throw error
         if (!data?.length) { setOrdenes([]); setCargando(false); return }
 
-        // Verificar stock de MP para cada receta
-        const recetaIds = [...new Set(data.map(o => o.receta_id))]
-        const { data: ingredientes } = await supabase.from('receta_ingredientes')
-          .select('receta_id, mp_id, cantidad')
-          .in('receta_id', recetaIds)
+        // Traer items de esas órdenes
+        const ordenIds = data.map(o => o.id)
+        const { data: itemsData, error: itemsErr } = await supabase
+          .from('ordenes_produccion_items')
+          .select('orden_id, producto_id, cantidad_planificada, cantidad_producida')
+          .in('orden_id', ordenIds)
 
-        const mpIds = [...new Set((ingredientes || []).map(i => i.mp_id))]
-        let mpStock = {}
-        if (mpIds.length) {
-          const { data: mps } = await supabase.from('materias_primas')
-            .select('id, stock_actual')
-            .in('id', mpIds)
-          ;(mps || []).forEach(mp => { mpStock[mp.id] = mp.stock_actual })
+        if (itemsErr) throw itemsErr
+
+        // Traer nombres de productos
+        const productoIds = [...new Set((itemsData || []).map(i => i.producto_id))]
+        let ptMap = {}
+        if (productoIds.length) {
+          const { data: ptData } = await supabase
+            .from('productos_terminados')
+            .select('id, nombre, unidad')
+            .in('id', productoIds)
+          ;(ptData || []).forEach(p => { ptMap[p.id] = p })
         }
 
-        // Por orden: ¿tiene MP suficiente para cant_batches?
-        const ingPorReceta = {}
-        ;(ingredientes || []).forEach(i => {
-          if (!ingPorReceta[i.receta_id]) ingPorReceta[i.receta_id] = []
-          ingPorReceta[i.receta_id].push(i)
-        })
-
-        const resultado = data.map(o => {
-          const ings = ingPorReceta[o.receta_id] || []
-          let stockOk = true
-          ings.forEach(ing => {
-            const necesario = ing.cantidad * o.cantidad_batches
-            if ((mpStock[ing.mp_id] ?? 0) < necesario) stockOk = false
+        // Agrupar items por orden
+        const itemsPorOrden = {}
+        ;(itemsData || []).forEach(i => {
+          if (!itemsPorOrden[i.orden_id]) itemsPorOrden[i.orden_id] = []
+          itemsPorOrden[i.orden_id].push({
+            ...i,
+            producto_nombre: ptMap[i.producto_id]?.nombre ?? 'Producto',
+            unidad: ptMap[i.producto_id]?.unidad ?? '',
           })
-          return { ...o, stockMpOk: stockOk }
         })
 
-        setOrdenes(resultado)
+        setOrdenes(data.map(o => ({ ...o, items: itemsPorOrden[o.id] || [] })))
       } catch (e) {
         toast('Error cargando órdenes del día', 'err')
       } finally {
@@ -301,6 +301,11 @@ function ProduccionPlanificada({ negocioId }) {
     return map[est] || 'gray'
   }
 
+  const turnoLabel = t => {
+    const map = { manana: 'Mañana', mañana: 'Mañana', tarde: 'Tarde', noche: 'Noche' }
+    return map[t] || t || ''
+  }
+
   if (cargando) return <Spinner />
 
   return (
@@ -311,31 +316,65 @@ function ProduccionPlanificada({ negocioId }) {
         : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {ordenes.map(o => (
-              <Card key={o.id} style={{
-                borderLeft: `4px solid ${o.prioridad === 'urgente' ? C.rojo : '#D1D5DB'}`
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
+              <Card key={o.id} style={{ borderLeft: `4px solid ${o.prioridad === 'urgente' ? C.rojo : '#E5E7EB'}` }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
                   {o.prioridad === 'urgente' && (
                     <span style={{
                       background: C.rojo, color: '#fff', fontSize: 11,
                       fontWeight: 700, borderRadius: 4, padding: '1px 7px'
                     }}>URGENTE</span>
                   )}
-                  <span style={{ fontWeight: 700, fontSize: 15, color: '#111827' }}>
-                    #{o.numero_orden} — {o.producto_nombre}
-                  </span>
+                  {o.numero_orden && (
+                    <span style={{ fontWeight: 700, fontSize: 14, color: '#111827' }}>
+                      #{o.numero_orden}
+                    </span>
+                  )}
                   <Badge type={estadoBadge(o.estado)}>{o.estado.replace('_', ' ')}</Badge>
+                  {o.turno && (
+                    <span style={{
+                      fontSize: 12, fontWeight: 600, color: '#6B7280',
+                      background: '#F3F4F6', borderRadius: 4, padding: '1px 8px'
+                    }}>
+                      {turnoLabel(o.turno)}
+                    </span>
+                  )}
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 16, fontSize: 13, color: '#6B7280' }}>
-                  <span>Receta: <b style={{ color: '#374151' }}>{o.receta_nombre}</b></span>
-                  <span>Batches: <b style={{ color: '#374151' }}>{o.cantidad_batches}</b></span>
-                  <span style={{
-                    fontWeight: 600,
-                    color: o.stockMpOk ? C.verde : C.rojo
-                  }}>
-                    {o.stockMpOk ? '✓ MP disponible' : '⚠ MP insuficiente'}
-                  </span>
-                </div>
+                {o.items.length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {o.items.map((it, idx) => {
+                      const producido = it.cantidad_producida ?? 0
+                      const planif = it.cantidad_planificada ?? 0
+                      const pct = planif > 0 ? Math.round((producido / planif) * 100) : 0
+                      return (
+                        <div key={idx} style={{ fontSize: 13, color: '#374151' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ flex: 1, fontWeight: 600 }}>{it.producto_nombre}</span>
+                            <span style={{ color: '#6B7280' }}>
+                              {producido}/{planif} {it.unidad}
+                            </span>
+                          </div>
+                          <div style={{
+                            marginTop: 3, background: '#E5E7EB',
+                            borderRadius: 99, height: 4, overflow: 'hidden'
+                          }}>
+                            <div style={{
+                              width: `${Math.min(pct, 100)}%`, height: '100%',
+                              background: pct >= 100 ? C.verde : pct > 0 ? C.amarillo : '#D1D5DB',
+                              borderRadius: 99
+                            }} />
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <span style={{ fontSize: 13, color: '#9CA3AF' }}>Sin ítems cargados</span>
+                )}
+                {o.notas && (
+                  <div style={{ marginTop: 8, fontSize: 12, color: '#9CA3AF', fontStyle: 'italic' }}>
+                    {o.notas}
+                  </div>
+                )}
               </Card>
             ))}
           </div>

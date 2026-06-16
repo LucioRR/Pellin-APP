@@ -840,14 +840,38 @@ export async function checkMPParaOrden(negocioId, items) {
 export async function createOrden(negocioId, userId, datos) {
   const { items, ...cabecera } = datos
 
+  // Numero correlativo por negocio (mismo patron que remito_secuencia)
+  const { data: secRow } = await supabase
+    .from('negocio_ordenes')
+    .select('ultimo_numero_orden')
+    .eq('negocio_id', negocioId)
+    .maybeSingle()
+
+  const nuevoNumero = (secRow?.ultimo_numero_orden || 0) + 1
+
+  if (secRow) {
+    const { error: secErr } = await supabase
+      .from('negocio_ordenes')
+      .update({ ultimo_numero_orden: nuevoNumero })
+      .eq('negocio_id', negocioId)
+    if (secErr) throw secErr
+  } else {
+    const { error: secErr } = await supabase
+      .from('negocio_ordenes')
+      .insert({ negocio_id: negocioId, ultimo_numero_orden: nuevoNumero })
+    if (secErr) throw secErr
+  }
+
   const { data: orden, error: errO } = await supabase
     .from('ordenes_produccion')
     .insert({
       negocio_id: negocioId,
       created_by: userId,
       estado: 'planificada',
+      numero_orden: nuevoNumero,
+      prioridad: cabecera.prioridad || 'normal',
       fecha_planificada: cabecera.fecha_planificada,
-      turno: cabecera.turno || 'mañana',
+      turno: cabecera.turno || 'manana',
       notas: cabecera.notas || null,
       pedido_id: cabecera.pedido_id || null,
     })
@@ -957,7 +981,7 @@ export async function completarOrden(negocioId, userId, orden, cantidades, fecha
       fecha: fechaLote,
       cantBatches,
       receta: recetaConPrecios,
-      notas: `Generado desde Orden de Producción #${orden.id.slice(0, 8)}`,
+      notas: `Generado desde Orden de Producción #${orden.numero_orden || orden.id.slice(0, 8)}`,
       ordenId: orden.id,              // FIX: era ordenId sin declarar en la firma anterior
       fechaVencimiento,               // NUEVO: propagar vencimiento desde completarOrden
     })
