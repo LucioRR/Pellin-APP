@@ -112,32 +112,35 @@ function PedidosHoy({ negocioId }) {
 
         if (!pedData?.length) { setPedidos([]); setCargando(false); return }
 
-        // Traer items de esos pedidos
+        // Traer items de esos pedidos (sin producto_nombre — schema real)
         const ids = pedData.map(p => p.id)
         const { data: itemsData, error: itemsErr } = await supabase.from('pedido_items')
-          .select('pedido_id, producto_id, producto_nombre, cantidad')
+          .select('pedido_id, producto_id, cantidad_pedida, cantidad_despachada')
           .in('pedido_id', ids)
 
         if (itemsErr) throw itemsErr
 
-        // Traer stock de productos involucrados
+        // Traer nombre y stock de productos involucrados
         const productoIds = [...new Set((itemsData || []).map(i => i.producto_id))]
-        let stockMap = {}
+        let ptMap = {}
         if (productoIds.length) {
           const { data: ptData } = await supabase.from('productos_terminados')
-            .select('id, stock_actual, stock_minimo')
+            .select('id, nombre, unidad, stock_actual, stock_minimo')
             .in('id', productoIds)
-          ;(ptData || []).forEach(p => { stockMap[p.id] = p })
+          ;(ptData || []).forEach(p => { ptMap[p.id] = p })
         }
 
         // Armar estructura
         const itemsPorPedido = {}
         ;(itemsData || []).forEach(i => {
           if (!itemsPorPedido[i.pedido_id]) itemsPorPedido[i.pedido_id] = []
+          const pt = ptMap[i.producto_id]
           itemsPorPedido[i.pedido_id].push({
             ...i,
-            stock: stockMap[i.producto_id]?.stock_actual ?? null,
-            stockMinimo: stockMap[i.producto_id]?.stock_minimo ?? 0,
+            producto_nombre: pt?.nombre ?? 'Producto',
+            unidad: pt?.unidad ?? '',
+            stock: pt?.stock_actual ?? null,
+            stockMinimo: pt?.stock_minimo ?? 0,
           })
         })
 
@@ -147,7 +150,7 @@ function PedidosHoy({ negocioId }) {
           let peor = 'verde'
           items.forEach(it => {
             if (it.stock === null) return
-            const color = it.stock < it.cantidad ? 'rojo'
+            const color = it.stock < it.cantidad_pedida ? 'rojo'
               : it.stock <= it.stockMinimo ? 'amarillo'
               : 'verde'
             if (color === 'rojo') peor = 'rojo'
@@ -167,7 +170,7 @@ function PedidosHoy({ negocioId }) {
   }, [negocioId])
 
   const estadoBadge = est => {
-    const map = { pendiente: 'warn', preparando: 'blue', listo: 'ok', entregado: 'gray' }
+    const map = { pendiente: 'warn', confirmado: 'blue', en_preparacion: 'blue', preparando: 'blue', listo: 'ok', despachado: 'ok', entregado: 'gray' }
     return map[est] || 'gray'
   }
 
@@ -200,7 +203,7 @@ function PedidosHoy({ negocioId }) {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                   {p.items.map((it, idx) => {
                     const colorIt = it.stock === null ? 'gris'
-                      : it.stock < it.cantidad ? 'rojo'
+                      : it.stock < it.cantidad_pedida ? 'rojo'
                       : it.stock <= it.stockMinimo ? 'amarillo'
                       : 'verde'
                     return (
@@ -210,7 +213,9 @@ function PedidosHoy({ negocioId }) {
                       }}>
                         <Semaforo color={colorIt === 'gris' ? 'amarillo' : colorIt} />
                         <span style={{ flex: 1 }}>{it.producto_nombre}</span>
-                        <span style={{ fontWeight: 600 }}>×{it.cantidad}</span>
+                        <span style={{ fontWeight: 600 }}>
+                          ×{it.cantidad_pedida} {it.unidad}
+                        </span>
                         {it.stock !== null && (
                           <span style={{
                             fontSize: 12,
