@@ -17,7 +17,7 @@ import SearchableSelect from '../components/SearchableSelect'
 import {
   Btn, BtnSm, Badge, Card, Modal,
   TH, TD, EmptyRow, PageHeader,
-  FG, Inp, Sel, Textarea, Grid2,
+  FG, Inp, Sel, Textarea, Grid2, Grid3,
   Ic, Spinner, InfoBox, Lbl,
 } from '../components/UI'
 
