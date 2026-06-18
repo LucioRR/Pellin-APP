@@ -254,7 +254,7 @@ function ProduccionPlanificada({ negocioId }) {
           .select('id, fecha_planificada, turno, estado, notas, pedido_id, numero_orden, prioridad')
           .eq('negocio_id', negocioId)
           .eq('fecha_planificada', hoy())
-          .in('estado', ['pendiente', 'en_proceso'])
+          .in('estado', ['planificada', 'en_proceso'])
           .order('created_at', { ascending: true })
 
         if (error) throw error
@@ -302,7 +302,7 @@ function ProduccionPlanificada({ negocioId }) {
   }, [negocioId])
 
   const estadoBadge = est => {
-    const map = { pendiente: 'warn', en_proceso: 'blue', completada: 'ok', cancelada: 'err' }
+    const map = { planificada: 'warn', en_proceso: 'blue', completada: 'ok', cancelada: 'err' }
     return map[est] || 'gray'
   }
 
