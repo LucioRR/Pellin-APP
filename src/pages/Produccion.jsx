@@ -3,6 +3,7 @@ import { supabase, ARS, fNum, fFecha, hoy, r2, diasRestantes } from '../lib/supa
 import { useNegocio, acciones, darDeBajaLote } from '../lib/negocio'
 import { useToast } from '../contexts/ToastContext'
 import { useAuth } from '../contexts/AuthContext'
+import { useSort } from '../lib/hooks'
 import { PageHeader, Card, Btn, BtnSm, Badge, Modal, AnularModal, FG, Grid2, Inp, Sel, Tabs, MRow, Spinner, TH, TD, EmptyRow, InfoBox, Ic } from '../components/UI'
 import SearchableSelect from '../components/SearchableSelect'
 import PrintLabel from '../components/PrintLabel'
@@ -13,6 +14,7 @@ export default function Produccion() {
   const { toast } = useToast()
   const [tab, setTab] = useState('lotes')
   const [lotes, setLotes] = useState([])
+  const [salidasPorLote, setSalidasPorLote] = useState({}) // loteId → cantidad salida total
   const [recetas, setRecetas] = useState([])
   const [materias, setMaterias] = useState([])
   const [productos, setProductos] = useState([])
@@ -28,22 +30,30 @@ export default function Produccion() {
   const [rForm, setRForm] = useState({ nombre: '', rendimiento: '', unidad_rendimiento: 'kg' })
   const [ings, setIngs] = useState([{ mpId: '', mpNombre: '', cantidad: '', unidad: '' }])
   const [fechaVencCalculada, setFechaVencCalculada] = useState(null)
-  const [filtroVenc, setFiltroVenc] = useState('todos')
+  const [filtroVenc, setFiltroVenc] = useState('con_stock')
+  const { sort: sortLotes, toggle: toggleSortLotes, apply: applySort } = useSort('fecha', 'desc')
 
   useEffect(() => { if (negocioId) cargar() }, [negocioId])
 
   const cargar = async () => {
     setCargando(true)
-    const [{ data: ls }, { data: rs }, { data: ms }, { data: ps }] = await Promise.all([
+    const [{ data: ls }, { data: rs }, { data: ms }, { data: ps }, { data: sals }] = await Promise.all([
       supabase.from('lotes').select('*, creadoPor:creado_por(nombre), anuladoPor:anulado_por(nombre)').eq('negocio_id', negocioId).order('fecha', { ascending: false }),
       supabase.from('recetas').select('*, ingredientes:receta_ingredientes(*)').eq('negocio_id', negocioId).eq('activo', true).order('nombre'),
       supabase.from('materias_primas').select('id,nombre,unidad,precio_costo,stock_actual').eq('negocio_id', negocioId).eq('activo', true).order('nombre'),
       supabase.from('productos_terminados').select('id,nombre,unidad,vida_util_dias').eq('negocio_id', negocioId).eq('activo', true).order('nombre'),
+      supabase.from('salidas_produccion').select('lote_id,cantidad').eq('negocio_id', negocioId).not('lote_id', 'is', null).eq('anulada', false),
     ])
     setLotes(ls || [])
     setRecetas(rs || [])
     setMaterias(ms || [])
     setProductos(ps || [])
+    // Agrupar salidas por lote_id para calcular stock restante
+    const porLote = {}
+    for (const s of (sals || [])) {
+      porLote[s.lote_id] = (porLote[s.lote_id] || 0) + Number(s.cantidad)
+    }
+    setSalidasPorLote(porLote)
     if (rs?.length) setLoteForm(f => ({ ...f, recetaId: rs[0].id }))
     setCargando(false)
   }
@@ -199,14 +209,28 @@ export default function Produccion() {
     setSaving(false)
   }
 
-  const lotesFiltrados = lotes.filter(l => {
-    if (filtroVenc === 'todos') return true
-    const d = diasRestantes(l.fecha_vencimiento)
-    if (filtroVenc === 'vencidos') return d !== null && d < 0
-    if (filtroVenc === 'proximos') return d !== null && d >= 0 && d <= 3
-    if (filtroVenc === 'ok') return d === null || d > 3
-    return true
-  })
+  const stockRestante = (l) => Math.max(0, l.total_producido - (salidasPorLote[l.id] || 0))
+
+  const lotesFiltrados = applySort(
+    lotes.filter(l => {
+      const d = diasRestantes(l.fecha_vencimiento)
+      const stock = stockRestante(l)
+      if (filtroVenc === 'con_stock') return !l.anulado && stock > 0
+      if (filtroVenc === 'todos') return true
+      if (filtroVenc === 'agotados') return !l.anulado && stock <= 0
+      if (filtroVenc === 'vencidos') return d !== null && d < 0
+      if (filtroVenc === 'proximos') return d !== null && d >= 0 && d <= 3
+      return true
+    }),
+    {
+      fecha:   l => l.fecha,
+      receta:  l => l.receta_nombre?.toLowerCase(),
+      prod:    l => l.total_producido,
+      costo:   l => l.costo_total,
+      vence:   l => l.fecha_vencimiento || '',
+      stock:   l => stockRestante(l),
+    }
+  )
 
   if (cargando) return <Spinner />
 
@@ -229,26 +253,27 @@ export default function Produccion() {
             <Sel
               value={filtroVenc}
               onChange={e => setFiltroVenc(e.target.value)}
-              style={{ minWidth: 200 }}
+              style={{ minWidth: 220 }}
             >
+              <option value="con_stock">Con stock disponible</option>
               <option value="todos">Todos los lotes</option>
+              <option value="agotados">Agotados (sin stock)</option>
               <option value="vencidos">⛔ Vencidos</option>
               <option value="proximos">⚠️ Vencen en 3 días</option>
-              <option value="ok">✅ Sin alerta</option>
             </Sel>
           </div>
 
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
-                <TH>Fecha</TH>
-                <TH>Receta</TH>
+                <TH onSort={() => toggleSortLotes('fecha')} sortDir={sortLotes.col === 'fecha' ? sortLotes.dir : null}>Fecha</TH>
+                <TH onSort={() => toggleSortLotes('receta')} sortDir={sortLotes.col === 'receta' ? sortLotes.dir : null}>Receta</TH>
                 <TH>Lotes</TH>
-                <TH>Producido</TH>
-                <TH>Costo total</TH>
-                <TH>Vence</TH>
+                <TH onSort={() => toggleSortLotes('prod')} sortDir={sortLotes.col === 'prod' ? sortLotes.dir : null}>Producido</TH>
+                <TH onSort={() => toggleSortLotes('costo')} sortDir={sortLotes.col === 'costo' ? sortLotes.dir : null}>Costo total</TH>
+                <TH onSort={() => toggleSortLotes('vence')} sortDir={sortLotes.col === 'vence' ? sortLotes.dir : null}>Vence</TH>
                 <TH>Usuario</TH>
-                <TH>Estado</TH>
+                <TH onSort={() => toggleSortLotes('stock')} sortDir={sortLotes.col === 'stock' ? sortLotes.dir : null}>Stock disp.</TH>
                 <TH></TH>
               </tr>
             </thead>
@@ -256,6 +281,7 @@ export default function Produccion() {
               {lotesFiltrados.length === 0 && <EmptyRow cols={9} msg="Sin lotes para el filtro seleccionado" />}
               {lotesFiltrados.map(l => {
                 const dias = diasRestantes(l.fecha_vencimiento)
+                const stock = stockRestante(l)
                 const rowBg = l.anulado ? '#F9F9F7'
                   : dias !== null && dias < 0  ? '#ffeaea'
                   : dias !== null && dias <= 3 ? '#fffbe6'
@@ -281,7 +307,9 @@ export default function Produccion() {
                     <TD>
                       {l.anulado
                         ? <><Badge type="gray">Anulado</Badge><div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2 }}>{l.motivo_anulacion}</div></>
-                        : <Badge type="ok">Activo</Badge>
+                        : stock <= 0
+                          ? <Badge type="gray">Agotado</Badge>
+                          : <><Badge type="ok">{fNum(stock)} {l.unidad}</Badge></>
                       }
                     </TD>
                     {/* NUEVO: acciones por lote */}

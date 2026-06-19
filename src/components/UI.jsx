@@ -313,13 +313,24 @@ export const Stat = ({ label, val, color, icon, sub }) => (
 )
 
 // ── Table helpers ─────────────────────────────────────────────────────────────
-export const TH = ({ children, right }) => (
-  <th style={{
-    textAlign: right ? 'right' : 'left', padding: '10px 14px',
-    fontSize: 10, letterSpacing: '.1em', textTransform: 'uppercase',
-    color: '#6C6659', borderBottom: '2px solid #D8D2C7',
-    background: '#F3EEE5', whiteSpace: 'nowrap', fontWeight: 700,
-  }}>{children}</th>
+export const TH = ({ children, right, onSort, sortDir }) => (
+  <th
+    onClick={onSort}
+    style={{
+      textAlign: right ? 'right' : 'left', padding: '10px 14px',
+      fontSize: 10, letterSpacing: '.1em', textTransform: 'uppercase',
+      color: onSort ? '#2D6A4F' : '#6C6659', borderBottom: '2px solid #D8D2C7',
+      background: '#F3EEE5', whiteSpace: 'nowrap', fontWeight: 700,
+      cursor: onSort ? 'pointer' : 'default', userSelect: 'none',
+    }}
+  >
+    {children}
+    {onSort && (
+      <span style={{ marginLeft: 4, opacity: sortDir ? 1 : 0.35, fontSize: 9 }}>
+        {sortDir === 'asc' ? '▲' : '▼'}
+      </span>
+    )}
+  </th>
 )
 
 export const TD = ({ children, bold, color, sm, right, nowrap, style = {} }) => (

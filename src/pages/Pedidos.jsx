@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth }  from '../contexts/AuthContext'
 import { useToast } from '../contexts/ToastContext'
 import { supabase, fFecha, fNum } from '../lib/supabase'
+import { useSort } from '../lib/hooks'
 import {
   getPedidos, createPedido, updateEstadoPedido,
   checkStockPedido, despacharPedido,
@@ -331,6 +332,7 @@ export default function Pedidos() {
   const [filtroEstado,     setFiltroEstado]     = useState('todos')
   const [filtroFechaDesde, setFiltroFechaDesde] = useState('')
   const [filtroFechaHasta, setFiltroFechaHasta] = useState('')
+  const { sort: sortP, toggle: toggleSortP, apply: applySortP } = useSort('fecha_entrega', 'asc')
   const [vista,            setVista]            = useState('lista') // 'lista' | 'agenda'
 
   const [modalCrear,    setModalCrear]    = useState(false)
@@ -524,6 +526,11 @@ export default function Pedidos() {
   const pedidosProximos = pedidos.filter(
     p => p.fecha_entrega > hoy && !['cancelado', 'despachado'].includes(p.estado)
   )
+  const pedidosOrdenados = applySortP(pedidos, {
+    cliente:        p => p.cliente_nombre?.toLowerCase(),
+    fecha_entrega:  p => p.fecha_entrega,
+    estado:         p => p.estado,
+  })
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -589,17 +596,17 @@ export default function Pedidos() {
                   <thead>
                     <tr>
                       <TH>Stock</TH>
-                      <TH>Cliente</TH>
+                      <TH onSort={() => toggleSortP('cliente')} sortDir={sortP.col === 'cliente' ? sortP.dir : null}>Cliente</TH>
                       <TH>Productos</TH>
-                      <TH>F. Entrega</TH>
-                      <TH>Estado</TH>
+                      <TH onSort={() => toggleSortP('fecha_entrega')} sortDir={sortP.col === 'fecha_entrega' ? sortP.dir : null}>F. Entrega</TH>
+                      <TH onSort={() => toggleSortP('estado')} sortDir={sortP.col === 'estado' ? sortP.dir : null}>Estado</TH>
                       <TH></TH>
                     </tr>
                   </thead>
                   <tbody>
-                    {pedidos.length === 0
+                    {pedidosOrdenados.length === 0
                       ? <EmptyRow cols={6} msg="No hay pedidos con esos filtros." />
-                      : pedidos.map(pedido => {
+                      : pedidosOrdenados.map(pedido => {
                           const esHoy   = pedido.fecha_entrega === hoy
                           const vencido = pedido.fecha_entrega < hoy &&
                                           !['despachado', 'cancelado'].includes(pedido.estado)

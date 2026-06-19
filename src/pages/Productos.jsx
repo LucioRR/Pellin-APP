@@ -3,6 +3,7 @@ import { supabase, ARS, fNum, fFecha, r2, diasRestantes } from '../lib/supabase'
 import { useNegocio, acciones } from '../lib/negocio'
 import { useToast } from '../contexts/ToastContext'
 import { useAuth } from '../contexts/AuthContext'
+import { useSort } from '../lib/hooks'
 import { PageHeader, Card, Btn, BtnSm, Badge, Modal, AnularModal, FG, Grid2, Inp, Sel, Tabs, MRow, Spinner, TH, TD, EmptyRow, InfoBox, Ic } from '../components/UI'
 
 export default function Productos() {
@@ -21,6 +22,8 @@ export default function Productos() {
   const [lotesProducto, setLotesProducto] = useState([])
   const [loadingLotes, setLoadingLotes] = useState(false)
   const [productoDetalle, setProductoDetalle] = useState(null)
+  const { sort: sortProd, toggle: toggleSortProd, apply: applySortProd } = useSort('nombre', 'asc')
+  const { sort: sortLotes, toggle: toggleSortLotes, apply: applySortLotes } = useSort('fecha', 'desc')
 
   const fk = (k, v) => setForm(x => ({ ...x, [k]: v }))
 
@@ -116,19 +119,25 @@ export default function Productos() {
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
-                <TH>Producto</TH>
+                <TH onSort={() => toggleSortProd('nombre')} sortDir={sortProd.col === 'nombre' ? sortProd.dir : null}>Producto</TH>
                 <TH>Unidad</TH>
-                <TH>En depósito</TH>
-                <TH>Stock mínimo</TH>
-                <TH>Vida útil</TH>
-                <TH>Receta vinculada</TH>
+                <TH onSort={() => toggleSortProd('stock')} sortDir={sortProd.col === 'stock' ? sortProd.dir : null}>En depósito</TH>
+                <TH onSort={() => toggleSortProd('stock_minimo')} sortDir={sortProd.col === 'stock_minimo' ? sortProd.dir : null}>Stock mínimo</TH>
+                <TH onSort={() => toggleSortProd('vida_util')} sortDir={sortProd.col === 'vida_util' ? sortProd.dir : null}>Vida útil</TH>
+                <TH onSort={() => toggleSortProd('receta')} sortDir={sortProd.col === 'receta' ? sortProd.dir : null}>Receta vinculada</TH>
                 <TH>Estado</TH>
                 <TH></TH>
               </tr>
             </thead>
             <tbody>
               {productos.length === 0 && <EmptyRow cols={8} msg="Sin productos terminados. Creá uno para poder vincular lotes." />}
-              {productos.map(p => {
+              {applySortProd(productos, {
+                nombre:      p => p.nombre?.toLowerCase(),
+                stock:       p => Number(p.stock_actual),
+                stock_minimo:p => Number(p.stock_minimo),
+                vida_util:   p => Number(p.vida_util_dias || 0),
+                receta:      p => p.receta?.nombre?.toLowerCase() || '',
+              }).map(p => {
                 const bajo = Number(p.stock_actual) <= Number(p.stock_minimo)
                 return (
                   <tr key={p.id} style={{ background: bajo ? '#FFF8F7' : 'transparent' }}>
@@ -247,11 +256,11 @@ export default function Productos() {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead>
                   <tr>
-                    <TH>Fecha producción</TH>
-                    <TH>Cantidad producida</TH>
-                    <TH>Costo lote</TH>
+                    <TH onSort={() => toggleSortLotes('fecha')} sortDir={sortLotes.col === 'fecha' ? sortLotes.dir : null}>Fecha producción</TH>
+                    <TH onSort={() => toggleSortLotes('cant')} sortDir={sortLotes.col === 'cant' ? sortLotes.dir : null}>Cantidad producida</TH>
+                    <TH onSort={() => toggleSortLotes('costo')} sortDir={sortLotes.col === 'costo' ? sortLotes.dir : null}>Costo lote</TH>
                     <TH>Costo unitario</TH>
-                    <TH>Fecha vencimiento</TH>
+                    <TH onSort={() => toggleSortLotes('vence')} sortDir={sortLotes.col === 'vence' ? sortLotes.dir : null}>Fecha vencimiento</TH>
                     <TH>Días restantes</TH>
                     <TH>Notas</TH>
                   </tr>
@@ -259,7 +268,12 @@ export default function Productos() {
                 <tbody>
                   {lotesProducto.length === 0
                     ? <EmptyRow cols={7} msg="Sin lotes registrados para este producto" />
-                    : lotesProducto.map(l => {
+                    : applySortLotes(lotesProducto, {
+                        fecha: l => l.fecha,
+                        cant:  l => Number(l.total_producido),
+                        costo: l => Number(l.costo_total || 0),
+                        vence: l => l.fecha_vencimiento || '',
+                      }).map(l => {
                         const dias = diasRestantes(l.fecha_vencimiento)
                         const rowBg = dias === null ? 'transparent'
                           : dias < 0  ? '#ffeaea'

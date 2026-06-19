@@ -3,7 +3,7 @@ import { supabase, fFecha, fNum, ARS, hoy, diasRestantes } from '../lib/supabase
 import { useNegocio } from '../lib/negocio'
 import { useAuth } from '../contexts/AuthContext'
 import { useToast } from '../contexts/ToastContext'
-import { useIsMobile } from '../lib/hooks'
+import { useIsMobile, useSort } from '../lib/hooks'
 import SearchableSelect from '../components/SearchableSelect'
 import {
   PageHeader, Card, Btn, BtnSm, Badge, Modal, AnularModal,
@@ -80,6 +80,7 @@ export default function Remitos() {
   const { toast }                    = useToast()
   const isMobile                     = useIsMobile()
 
+  const { sort: sortR, toggle: toggleSortR, apply: applySortR } = useSort('creado_en', 'desc')
   const [remitos, setRemitos]           = useState([])
   const [productos, setProductos]       = useState([])
   const [cargando, setCargando]         = useState(true)
@@ -414,13 +415,23 @@ export default function Remitos() {
         <div className="table-responsive">
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead><tr>
-              <TH></TH><TH>Nº Remito</TH><TH>Fecha</TH>
-              <TH>Destino</TH><TH>Items</TH>
-              <TH>Registrado por</TH><TH>Estado</TH><TH></TH>
+              <TH></TH>
+              <TH onSort={() => toggleSortR('numero')} sortDir={sortR.col === 'numero' ? sortR.dir : null}>Nº Remito</TH>
+              <TH onSort={() => toggleSortR('creado_en')} sortDir={sortR.col === 'creado_en' ? sortR.dir : null}>Fecha</TH>
+              <TH onSort={() => toggleSortR('destino')} sortDir={sortR.col === 'destino' ? sortR.dir : null}>Destino</TH>
+              <TH>Items</TH>
+              <TH>Registrado por</TH>
+              <TH onSort={() => toggleSortR('estado')} sortDir={sortR.col === 'estado' ? sortR.dir : null}>Estado</TH>
+              <TH></TH>
             </tr></thead>
             <tbody>
               {remitos.length === 0 && <EmptyRow cols={8} msg="Sin remitos registrados" />}
-              {remitos.map(r => (
+              {applySortR(remitos, {
+                numero:    r => r.numero,
+                creado_en: r => r.creado_en,
+                destino:   r => r.destino?.toLowerCase(),
+                estado:    r => r.anulado ? 'z' : 'a',
+              }).map(r => (
                 <>
                   <tr key={r.id} style={{
                     background: detalleId === r.id ? '#F0EBE1' : r.anulado ? '#F9F9F7' : 'transparent',
