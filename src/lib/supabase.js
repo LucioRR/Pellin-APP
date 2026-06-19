@@ -24,6 +24,13 @@ export const mesSel = () => hoy().slice(0, 7)
 
 export const r2 = (n) => Math.round(n * 100) / 100
 
+export const diasRestantes = (fechaVenc) => {
+  if (!fechaVenc) return null
+  const d = new Date()
+  d.setHours(0, 0, 0, 0)
+  return Math.ceil((new Date(fechaVenc) - d) / (1000 * 60 * 60 * 24))
+}
+
 // ── CRUD helpers ──────────────────────────────────────────────────────────────
 export const db = {
   // Negocios

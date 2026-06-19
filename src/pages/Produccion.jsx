@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { supabase, ARS, fNum, fFecha, hoy, r2 } from '../lib/supabase'
+import { supabase, ARS, fNum, fFecha, hoy, r2, diasRestantes } from '../lib/supabase'
 import { useNegocio, acciones, darDeBajaLote } from '../lib/negocio'
 import { useToast } from '../contexts/ToastContext'
 import { useAuth } from '../contexts/AuthContext'
@@ -62,13 +62,6 @@ export default function Produccion() {
       setFechaVencCalculada(null)
     }
   }, [loteForm.productoId, loteForm.fecha, productos])
-
-  const diasRestantes = (fechaVenc) => {
-    if (!fechaVenc) return null
-    const d = new Date()
-    d.setHours(0, 0, 0, 0)
-    return Math.ceil((new Date(fechaVenc) - d) / (1000 * 60 * 60 * 24))
-  }
 
   const recSel = recetas.find(r => r.id === loteForm.recetaId)
   const cantB = Number(loteForm.cantBatches) || 0

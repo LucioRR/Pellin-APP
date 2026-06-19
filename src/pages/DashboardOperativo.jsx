@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { supabase, fFecha, hoy } from '../lib/supabase'
+import { supabase, fFecha, hoy, diasRestantes } from '../lib/supabase'
 import { useNegocio } from '../lib/negocio'
 import { useToast } from '../contexts/ToastContext'
 import {
@@ -23,13 +23,6 @@ const C = {
 }
 
 /* ─── Helpers ────────────────────────────────────────────────────────── */
-function diasHastaVencer(fechaVencimiento) {
-  if (!fechaVencimiento) return null
-  const hoyMs = new Date(hoy()).getTime()
-  const venceMs = new Date(fechaVencimiento).getTime()
-  return Math.floor((venceMs - hoyMs) / 86400000)
-}
-
 function colorVencimiento(dias) {
   if (dias <= 1) return 'rojo'
   if (dias <= 3) return 'amarillo'
@@ -438,7 +431,7 @@ function AlertasVencimiento({ negocioId }) {
         : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {lotes.map(l => {
-              const dias = diasHastaVencer(l.fecha_vencimiento)
+              const dias = diasRestantes(l.fecha_vencimiento)
               const color = colorVencimiento(dias)
               const fondoMap = { rojo: C.rojoFondo, amarillo: C.amarilloFondo, verde: C.verdeFondo }
               const bordeMap = { rojo: C.rojoBorde, amarillo: C.amarilloBorde, verde: C.verdeBorde }

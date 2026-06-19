@@ -170,7 +170,10 @@ function ModalCrear({ productos, loading, onClose, onSubmit }) {
 
 // ── Modal: Detalle / Gestión ──────────────────────────────────────────────────
 
-function ModalDetalle({ pedido, stockInfo, loading, onClose, onAvanzar, onCancelar, onCrearOrden }) {
+const LABELS_ORDEN = { pendiente: 'Pendiente', en_proceso: 'En proceso', completada: 'Completada', cancelada: 'Cancelada' }
+const BADGE_ORDEN  = { pendiente: 'warn', en_proceso: 'blue', completada: 'ok', cancelada: 'err' }
+
+function ModalDetalle({ pedido, stockInfo, ordenAsociada, loading, onClose, onAvanzar, onCancelar, onCrearOrden }) {
   const siguiente   = SIGUIENTE[pedido.estado]
   const esDespachar = siguiente === 'despachado'
   const yaTerminado = pedido.estado === 'despachado' || pedido.estado === 'cancelado'
@@ -201,6 +204,12 @@ function ModalDetalle({ pedido, stockInfo, loading, onClose, onAvanzar, onCancel
         )}
         {pedido.remito_id && (
           <span style={{ color: '#1A7A3E', fontWeight: 600 }}>✓ Remito generado</span>
+        )}
+        {ordenAsociada && (
+          <span>
+            <span style={{ color: '#6C6659' }}>O.P.: </span>
+            <Badge type={BADGE_ORDEN[ordenAsociada.estado]}>{LABELS_ORDEN[ordenAsociada.estado]}</Badge>
+          </span>
         )}
       </div>
 
@@ -273,9 +282,10 @@ function ModalDetalle({ pedido, stockInfo, loading, onClose, onAvanzar, onCancel
                 ? '🔴 Sin stock suficiente para uno o más ítems.'
                 : '🟡 Stock parcial en algunos ítems.'}
             </span>
-            <BtnSm v="ghost" onClick={onCrearOrden}>
-              📋 Crear Orden de Producción
-            </BtnSm>
+            {ordenAsociada
+              ? <span style={{ fontSize: 12, color: '#6C6659' }}>📋 O.P. ya creada</span>
+              : <BtnSm v="ghost" onClick={onCrearOrden}>📋 Crear Orden de Producción</BtnSm>
+            }
           </div>
         </InfoBox>
       )}
@@ -325,6 +335,7 @@ export default function Pedidos() {
 
   const [modalCrear,    setModalCrear]    = useState(false)
   const [pedidoDetalle, setPedidoDetalle] = useState(null)
+  const [ordenAsociada, setOrdenAsociada] = useState(null)
 
   // ── Acceso ────────────────────────────────────────────────────────────────
   if (!tieneAcceso('pedidos')) {
@@ -484,6 +495,20 @@ export default function Pedidos() {
     }
   }
 
+  async function abrirDetalle(pedido) {
+    setOrdenAsociada(null)
+    setPedidoDetalle(pedido)
+    const { data } = await supabase
+      .from('ordenes_produccion')
+      .select('id, estado, fecha_planificada')
+      .eq('pedido_id', pedido.id)
+      .eq('anulada', false)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    setOrdenAsociada(data || null)
+  }
+
   function handleCrearOrden() {
     // Navegar a Órdenes pasando el ID del pedido como query param
     // OrdenesProduccion.jsx lo lee y pre-carga el formulario automáticamente
@@ -640,7 +665,7 @@ export default function Pedidos() {
                                 <Badge type={BADGE[pedido.estado]}>{LABELS[pedido.estado]}</Badge>
                               </TD>
                               <TD>
-                                <BtnSm onClick={() => setPedidoDetalle(pedido)}>Ver</BtnSm>
+                                <BtnSm onClick={() => abrirDetalle(pedido)}>Ver</BtnSm>
                               </TD>
                             </tr>
                           )
@@ -709,7 +734,7 @@ export default function Pedidos() {
                         </div>
                       )}
                     </div>
-                    <BtnSm onClick={() => setPedidoDetalle(pedido)}>
+                    <BtnSm onClick={() => abrirDetalle(pedido)}>
                       {despachado ? 'Ver' : 'Gestionar'}
                     </BtnSm>
                   </Card>
@@ -746,7 +771,7 @@ export default function Pedidos() {
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <Badge type={BADGE[pedido.estado]}>{LABELS[pedido.estado]}</Badge>
-                      <BtnSm onClick={() => setPedidoDetalle(pedido)}>Ver</BtnSm>
+                      <BtnSm onClick={() => abrirDetalle(pedido)}>Ver</BtnSm>
                     </div>
                   </Card>
                 ))}
@@ -774,6 +799,7 @@ export default function Pedidos() {
         <ModalDetalle
           pedido={pedidoDetalle}
           stockInfo={stockMap[pedidoDetalle.id]}
+          ordenAsociada={ordenAsociada}
           loading={loadingAccion}
           onClose={() => setPedidoDetalle(null)}
           onAvanzar={() => handleAvanzar(pedidoDetalle)}

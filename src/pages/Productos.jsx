@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { supabase, ARS, fNum, fFecha, r2 } from '../lib/supabase'
+import { supabase, ARS, fNum, fFecha, r2, diasRestantes } from '../lib/supabase'
 import { useNegocio, acciones } from '../lib/negocio'
 import { useToast } from '../contexts/ToastContext'
 import { useAuth } from '../contexts/AuthContext'
@@ -84,20 +84,13 @@ export default function Productos() {
     setSaving(false)
   }
 
-  const diasRestantes = (fechaVenc) => {
-    if (!fechaVenc) return null
-    const d = new Date()
-    d.setHours(0, 0, 0, 0)
-    return Math.ceil((new Date(fechaVenc) - d) / (1000 * 60 * 60 * 24))
-  }
-
   // FIX: usar negocioId (de useNegocio), no negocioActivo.id
   const cargarLotesProducto = async (producto) => {
     setProductoDetalle(producto)
     setLoadingLotes(true)
     const { data } = await supabase
       .from('lotes')
-      .select('id, fecha, total_producido, fecha_vencimiento, notas')
+      .select('id, fecha, total_producido, costo_total, fecha_vencimiento, notas')
       .eq('producto_id', producto.id)
       .eq('negocio_id', negocioId)
       .order('fecha', { ascending: true })
@@ -256,6 +249,8 @@ export default function Productos() {
                   <tr>
                     <TH>Fecha producción</TH>
                     <TH>Cantidad producida</TH>
+                    <TH>Costo lote</TH>
+                    <TH>Costo unitario</TH>
                     <TH>Fecha vencimiento</TH>
                     <TH>Días restantes</TH>
                     <TH>Notas</TH>
@@ -263,7 +258,7 @@ export default function Productos() {
                 </thead>
                 <tbody>
                   {lotesProducto.length === 0
-                    ? <EmptyRow cols={5} msg="Sin lotes registrados para este producto" />
+                    ? <EmptyRow cols={7} msg="Sin lotes registrados para este producto" />
                     : lotesProducto.map(l => {
                         const dias = diasRestantes(l.fecha_vencimiento)
                         const rowBg = dias === null ? 'transparent'
@@ -274,6 +269,8 @@ export default function Productos() {
                           <tr key={l.id} style={{ background: rowBg }}>
                             <TD>{fFecha(l.fecha)}</TD>
                             <TD>{fNum(l.total_producido)}</TD>
+                            <TD>{l.costo_total ? ARS(l.costo_total) : '—'}</TD>
+                            <TD sm color="var(--muted)">{l.costo_total && l.total_producido ? ARS(r2(l.costo_total / l.total_producido)) : '—'}</TD>
                             <TD>{l.fecha_vencimiento ? fFecha(l.fecha_vencimiento) : '—'}</TD>
                             <TD>
                               {dias === null

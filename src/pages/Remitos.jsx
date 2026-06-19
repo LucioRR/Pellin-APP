@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { supabase, fFecha, fNum, ARS, hoy } from '../lib/supabase'
+import { supabase, fFecha, fNum, ARS, hoy, diasRestantes } from '../lib/supabase'
 import { useNegocio } from '../lib/negocio'
 import { useAuth } from '../contexts/AuthContext'
 import { useToast } from '../contexts/ToastContext'
@@ -381,13 +381,6 @@ export default function Remitos() {
       .from('remito_items').select('*').eq('remito_id', remito.id)
     setPrintData({ remito, items: its || [] })
     setTriggerPrint(true)
-  }
-
-  // ── Helper vencimiento ────────────────────────────────────────────────────
-  const diasRestantes = (fechaVenc) => {
-    if (!fechaVenc) return null
-    const d = new Date(); d.setHours(0, 0, 0, 0)
-    return Math.ceil((new Date(fechaVenc) - d) / 86400000)
   }
 
   const badgeVenc = (fechaVenc) => {
