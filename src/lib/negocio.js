@@ -1075,7 +1075,7 @@ export async function cancelarOrden(ordenId) {
 export async function getPedidosPendientesParaOrden(negocioId) {
   const { data, error } = await supabase
     .from('pedidos')
-    .select('id, cliente_nombre, fecha_entrega, numero_pedido')
+    .select('id, cliente_nombre, fecha_entrega')
     .eq('negocio_id', negocioId)
     .in('estado', ['recibido', 'confirmado', 'en_preparacion'])
     .order('fecha_entrega', { ascending: true })

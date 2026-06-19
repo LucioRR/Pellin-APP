@@ -522,11 +522,11 @@ function ModalCrear({ negocioId, userId, onClose, onCreated, toast, navigate, pe
   const productosOpts = productos.map(p => ({ value: p.id, label: p.nombre }))
   // Asegurar que el pedido pre-cargado aparezca aunque no esté en el listado regular
   const pedidosConPreCargado = pedidoPreCargado && !pedidos.find(p => p.id === pedidoPreCargado.pedidoId)
-    ? [{ id: pedidoPreCargado.pedidoId, cliente_nombre: pedidoPreCargado.clienteNombre, fecha_entrega: null, numero_pedido: '' }, ...pedidos]
+    ? [{ id: pedidoPreCargado.pedidoId, cliente_nombre: pedidoPreCargado.clienteNombre, fecha_entrega: null }, ...pedidos]
     : pedidos
   const pedidosOpts = [
     { value: '', label: '— Sin vincular —' },
-    ...pedidosConPreCargado.map(p => ({ value: p.id, label: `#${p.numero_pedido || ''} ${p.cliente_nombre}${p.fecha_entrega ? ' — ' + fFecha(p.fecha_entrega) : ''}` })),
+    ...pedidosConPreCargado.map(p => ({ value: p.id, label: `${p.cliente_nombre}${p.fecha_entrega ? ' — ' + fFecha(p.fecha_entrega) : ''}` })),
   ]
 
   const addItem = () => setItems(prev => [...prev, { producto_id: '', cantidad_planificada: '' }])
@@ -726,7 +726,7 @@ function ModalDetalle({ orden, onClose }) {
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
           <div><strong>Estado:</strong> {estadoBadge(orden.estado)}</div>
           {orden.pedidos && (
-            <div><strong>Pedido:</strong> #{orden.pedidos.numero_pedido} — {orden.pedidos.cliente_nombre}</div>
+            <div><strong>Pedido:</strong> {orden.pedidos.cliente_nombre}</div>
           )}
         </div>
 
