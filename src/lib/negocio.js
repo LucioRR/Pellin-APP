@@ -977,14 +977,22 @@ export async function completarOrden(negocioId, userId, orden, cantidades, fecha
 
     const receta = recetas[0]
 
-    const { data: materias } = await supabase
-      .from('materias_primas')
-      .select('id, precio_costo, stock_actual')
-      .eq('negocio_id', negocioId)
-      .in('id', receta.ingredientes.map(i => i.mp_id))
+    const mpIds = receta.ingredientes.map(i => i.mp_id).filter(Boolean)
+    let materiaMap = {}
+    if (mpIds.length > 0) {
+      const { data: materias } = await supabase
+        .from('materias_primas')
+        .select('id, precio_costo, stock_actual')
+        .eq('negocio_id', negocioId)
+        .in('id', mpIds)
+      for (const m of (materias || [])) materiaMap[m.id] = m
+    }
 
-    const materiaMap = {}
-    for (const m of (materias || [])) materiaMap[m.id] = m
+    // Validar que no haya ingredientes con MP eliminada (precio sería 0 silenciosamente)
+    const mpsFaltantes = receta.ingredientes.filter(ing => ing.mp_id && !materiaMap[ing.mp_id])
+    if (mpsFaltantes.length > 0) {
+      throw new Error(`La receta "${receta.nombre}" tiene ingredientes eliminados del sistema: ${mpsFaltantes.map(i => i.mp_id).join(', ')}`)
+    }
 
     const recetaConPrecios = {
       ...receta,
