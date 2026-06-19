@@ -54,7 +54,7 @@ export default function Proveedores() {
       if (error) { toast('Error al guardar', 'err'); setSaving(false); return }
       toast('Proveedor creado', 'ok')
     } else {
-      const { error } = await supabase.from('proveedores').update(payload).eq('id', modal.proveedor_id)
+      const { error } = await supabase.from('proveedores').update(payload).eq('id', modal.id)
       if (error) { toast('Error al guardar', 'err'); setSaving(false); return }
       toast('Proveedor actualizado', 'ok')
     }

@@ -18,7 +18,7 @@ export default function Compras() {
   const [modal, setModal] = useState(false)
   const [anularModal, setAnularModal] = useState(null)
   const [saving, setSaving] = useState(false)
-  const [form, setForm] = useState({ numero: '', proveedorId: '', fecha: hoy(), fechaVencimiento: '' })
+  const [form, setForm] = useState({ numero: '', proveedorId: '', fecha: hoy(), fechaVencimiento: '', ivaMonto: '', otrosCargos: '' })
   const [items, setItems] = useState([{ mpId: '', mpNombre: '', unidad: '', cantidad: '', precioUnitario: '' }])
 
   useEffect(() => { if (negocioId) cargar() }, [negocioId])
@@ -52,11 +52,14 @@ export default function Compras() {
     }
   }
 
-  const total = items.reduce((s, it) => s + ((+it.cantidad) * (+it.precioUnitario)), 0)
+  const subtotalItems = items.reduce((s, it) => s + ((+it.cantidad || 0) * (+it.precioUnitario || 0)), 0)
+  const ivaMonto = +form.ivaMonto || 0
+  const otrosCargos = +form.otrosCargos || 0
+  const totalFactura = subtotalItems + ivaMonto + otrosCargos
   const canSave = form.numero && form.proveedorId && items.every(it => it.mpId && it.cantidad && it.precioUnitario)
 
   const openAdd = () => {
-    setForm({ numero: '', proveedorId: proveedores[0]?.id || '', fecha: hoy(), fechaVencimiento: '' })
+    setForm({ numero: '', proveedorId: proveedores[0]?.id || '', fecha: hoy(), fechaVencimiento: '', ivaMonto: '', otrosCargos: '' })
     setItems([{ mpId: '', mpNombre: '', unidad: '', cantidad: '', precioUnitario: '' }])
     setModal(true)
   }
@@ -67,7 +70,7 @@ export default function Compras() {
     try {
       await acciones.registrarFactura({
         negocioId, userId: usuario.id,
-        factura: { numero: form.numero, proveedorId: form.proveedorId, fecha: form.fecha, fechaVencimiento: form.fechaVencimiento },
+        factura: { numero: form.numero, proveedorId: form.proveedorId, fecha: form.fecha, fechaVencimiento: form.fechaVencimiento, ivaMonto, otrosCargos },
         items: items.map(it => ({ mpId: it.mpId, mpNombre: it.mpNombre, unidad: it.unidad, cantidad: +it.cantidad, precioUnitario: +it.precioUnitario })),
       })
       toast('Factura registrada — stock y precios actualizados', 'ok')
@@ -155,8 +158,15 @@ export default function Compras() {
                   </tr>
                 ))}</tbody>
               </table>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12, fontFamily: 'var(--font-head)', fontSize: 17, fontWeight: 700 }}>
-                Total: {ARS(detalle.total)}
+              <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                {(detalle.iva_monto > 0 || detalle.otros_cargos > 0) && (
+                  <>
+                    <div style={{ fontSize: 12, color: 'var(--muted)' }}>Subtotal ítems: {ARS(detalle.total - (detalle.iva_monto || 0) - (detalle.otros_cargos || 0))}</div>
+                    {detalle.iva_monto > 0 && <div style={{ fontSize: 12, color: 'var(--muted)' }}>IVA: {ARS(detalle.iva_monto)}</div>}
+                    {detalle.otros_cargos > 0 && <div style={{ fontSize: 12, color: 'var(--muted)' }}>Otros cargos: {ARS(detalle.otros_cargos)}</div>}
+                  </>
+                )}
+                <div style={{ fontFamily: 'var(--font-head)', fontSize: 17, fontWeight: 700 }}>Total: {ARS(detalle.total)}</div>
               </div>
             </div>
           </Card>
@@ -211,9 +221,45 @@ export default function Compras() {
             </button>
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
-            <div style={{ fontFamily: 'var(--font-head)', fontSize: 18, fontWeight: 700 }}>Total: {ARS(total)}</div>
-            <div style={{ display: 'flex', gap: 10 }}>
+          {/* IVA y otros cargos */}
+          <div style={{ marginTop: 14, padding: '14px 16px', background: '#F8F5EF', borderRadius: 10, border: '1px solid var(--border)' }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>
+              Impuestos y cargos adicionales
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <FG label="IVA ($)">
+                <Inp type="number" min="0" value={form.ivaMonto} onChange={e => setForm(f => ({ ...f, ivaMonto: e.target.value }))} placeholder="0.00" />
+              </FG>
+              <FG label="Otros cargos ($)" >
+                <Inp type="number" min="0" value={form.otrosCargos} onChange={e => setForm(f => ({ ...f, otrosCargos: e.target.value }))} placeholder="Percepciones, sellado..." />
+              </FG>
+            </div>
+            <InfoBox type="info" style={{ marginTop: 8, fontSize: 12 }}>
+              El precio unitario de cada ítem se usa como costo neto de la materia prima. IVA y otros cargos van al total de la factura pero no afectan el costo de los ingredientes.
+            </InfoBox>
+          </div>
+
+          {/* Resumen de totales */}
+          <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--muted)' }}>
+                <span>Subtotal ítems</span><span>{ARS(subtotalItems)}</span>
+              </div>
+              {ivaMonto > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--muted)' }}>
+                  <span>IVA</span><span>{ARS(ivaMonto)}</span>
+                </div>
+              )}
+              {otrosCargos > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--muted)' }}>
+                  <span>Otros cargos</span><span>{ARS(otrosCargos)}</span>
+                </div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: 'var(--font-head)', fontSize: 18, fontWeight: 700, borderTop: '1px solid var(--border)', paddingTop: 8, marginTop: 2 }}>
+                <span>Total factura</span><span>{ARS(totalFactura)}</span>
+              </div>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
               <Btn v="ghost" onClick={() => setModal(false)}>Cancelar</Btn>
               <Btn onClick={save} disabled={!canSave} loading={saving}>Registrar factura</Btn>
             </div>

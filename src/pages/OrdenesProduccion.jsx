@@ -516,13 +516,17 @@ function ModalCrear({ negocioId, userId, onClose, onCreated, toast, navigate, pe
       .order('nombre')
       .then(({ data }) => setProductos(data || []))
 
-    getPedidosPendientesParaOrden(negocioId).then(setPedidos)
+    getPedidosPendientesParaOrden(negocioId).then(setPedidos).catch(() => {})
   }, [negocioId])
 
   const productosOpts = productos.map(p => ({ value: p.id, label: p.nombre }))
+  // Asegurar que el pedido pre-cargado aparezca aunque no esté en el listado regular
+  const pedidosConPreCargado = pedidoPreCargado && !pedidos.find(p => p.id === pedidoPreCargado.pedidoId)
+    ? [{ id: pedidoPreCargado.pedidoId, cliente_nombre: pedidoPreCargado.clienteNombre, fecha_entrega: null, numero_pedido: '' }, ...pedidos]
+    : pedidos
   const pedidosOpts = [
     { value: '', label: '— Sin vincular —' },
-    ...pedidos.map(p => ({ value: p.id, label: `${p.cliente_nombre}${p.fecha_entrega ? ' — ' + fFecha(p.fecha_entrega) : ''}` })),
+    ...pedidosConPreCargado.map(p => ({ value: p.id, label: `#${p.numero_pedido || ''} ${p.cliente_nombre}${p.fecha_entrega ? ' — ' + fFecha(p.fecha_entrega) : ''}` })),
   ]
 
   const addItem = () => setItems(prev => [...prev, { producto_id: '', cantidad_planificada: '' }])

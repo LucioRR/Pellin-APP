@@ -24,7 +24,12 @@ export default function Caja() {
   const cargar = async () => {
     setCargando(true)
     const [{ data: movs }, { data: cats }] = await Promise.all([
-      supabase.from('caja').select('*, creadoPor:creado_por(nombre), anuladoPor:anulado_por(nombre)').eq('negocio_id', negocioId).gte('fecha', `${mes}-01`).lte('fecha', `${mes}-31`).order('fecha', { ascending: false }).order('creado_en', { ascending: false }),
+      (() => {
+        const fin = new Date(mes + '-01')
+        fin.setMonth(fin.getMonth() + 1)
+        const hastaExcl = fin.toISOString().split('T')[0]
+        return supabase.from('caja').select('*, creadoPor:creado_por(nombre), anuladoPor:anulado_por(nombre)').eq('negocio_id', negocioId).gte('fecha', `${mes}-01`).lt('fecha', hastaExcl).order('fecha', { ascending: false }).order('creado_en', { ascending: false })
+      })(),
       supabase.from('categorias_caja').select('*').eq('negocio_id', negocioId).eq('activa', true).order('tipo').order('nombre'),
     ])
     setMovimientos(movs || [])

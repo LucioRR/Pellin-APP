@@ -19,6 +19,8 @@ export const acciones = {
 
   // Registrar factura: actualiza stock + precios + crea deuda
   async registrarFactura({ negocioId, userId, factura, items }) {
+    const subtotalItems = r2(items.reduce((s, i) => s + i.cantidad * i.precioUnitario, 0))
+    const totalFactura = r2(subtotalItems + (factura.ivaMonto || 0) + (factura.otrosCargos || 0))
     // 1. Insertar factura
     const { data: fv, error: fe } = await supabase
       .from('facturas')
@@ -28,7 +30,9 @@ export const acciones = {
         proveedor_id: factura.proveedorId,
         fecha: factura.fecha,
         fecha_vencimiento: factura.fechaVencimiento || null,
-        total: items.reduce((s, i) => s + i.cantidad * i.precioUnitario, 0),
+        total: totalFactura,
+        iva_monto: factura.ivaMonto || 0,
+        otros_cargos: factura.otrosCargos || 0,
         creado_por: userId,
       })
       .select()
@@ -1063,9 +1067,9 @@ export async function cancelarOrden(ordenId) {
 export async function getPedidosPendientesParaOrden(negocioId) {
   const { data, error } = await supabase
     .from('pedidos')
-    .select('id, cliente_nombre, fecha_entrega')
+    .select('id, cliente_nombre, fecha_entrega, numero_pedido')
     .eq('negocio_id', negocioId)
-    .in('estado', ['confirmado', 'en_preparacion'])
+    .in('estado', ['recibido', 'confirmado', 'en_preparacion'])
     .order('fecha_entrega', { ascending: true })
   if (error) throw error
   return data || []
