@@ -43,7 +43,12 @@ export default function Proveedores() {
   }
 
   const openAdd = () => { setForm({ nombre: '', cuit: '', telefono: '', email: '', notas: '' }); setModal('add') }
-  const openEdit = (pv) => { setForm({ nombre: pv.nombre, cuit: pv.cuit || '', telefono: pv.telefono || '', email: pv.email || '', notas: pv.notas || '' }); setModal(pv) }
+  const openEdit = async (pv) => {
+    // La vista no trae cuit/telefono/email/notas — hay que buscarlos de la tabla completa
+    const { data } = await supabase.from('proveedores').select('*').eq('id', pv.proveedor_id).single()
+    setForm({ nombre: data?.nombre || pv.nombre, cuit: data?.cuit || '', telefono: data?.telefono || '', email: data?.email || '', notas: data?.notas || '' })
+    setModal({ proveedor_id: pv.proveedor_id })
+  }
 
   const save = async () => {
     if (!form.nombre.trim()) return
@@ -54,7 +59,7 @@ export default function Proveedores() {
       if (error) { toast('Error al guardar', 'err'); setSaving(false); return }
       toast('Proveedor creado', 'ok')
     } else {
-      const { error } = await supabase.from('proveedores').update(payload).eq('id', modal.id)
+      const { error } = await supabase.from('proveedores').update(payload).eq('id', modal.proveedor_id)
       if (error) { toast('Error al guardar', 'err'); setSaving(false); return }
       toast('Proveedor actualizado', 'ok')
     }
