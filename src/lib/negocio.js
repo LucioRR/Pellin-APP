@@ -392,6 +392,18 @@ function calcularFechaVencimiento(fechaBase, dias) {
  * @returns {Array} [{ loteId, cantidad, loteDate, loteVenc }]
  */
 async function distribuirFIFO(negocioId, productoId, cantidadPedida) {
+  // stock_actual es la fuente de verdad: lo actualizan tanto salidas con lote
+  // como salidas manuales (lote_id=null). Usarlo como techo evita sobre-despachar.
+  const { data: pt } = await supabase
+    .from('productos_terminados')
+    .select('stock_actual')
+    .eq('id', productoId)
+    .single()
+
+  const stockReal = Math.max(0, Number(pt?.stock_actual || 0))
+  const aDistribuir = Math.min(cantidadPedida, stockReal)
+  if (aDistribuir <= 0) return []
+
   const { data: lotes } = await supabase
     .from('lotes')
     .select('id, fecha, total_producido, fecha_vencimiento')
@@ -402,7 +414,7 @@ async function distribuirFIFO(negocioId, productoId, cantidadPedida) {
 
   if (!lotes || lotes.length === 0) return []
 
-  // Stock real disponible por lote = total_producido - salidas activas
+  // Disponible por lote según sus salidas trazadas (lote_id específico)
   const lotesConStock = await Promise.all(lotes.map(async (lote) => {
     const { data: salidas } = await supabase
       .from('salidas_produccion')
@@ -416,7 +428,7 @@ async function distribuirFIFO(negocioId, productoId, cantidadPedida) {
   }))
 
   const lineas = []
-  let restante = cantidadPedida
+  let restante = aDistribuir
 
   for (const lote of lotesConStock) {
     if (restante <= 0) break
@@ -910,6 +922,21 @@ export async function updateOrdenEstado(ordenId, estado) {
  * FIX: firma incluye ordenId como parámetro nombrado correctamente.
  */
 export async function completarOrden(negocioId, userId, orden, cantidades, fechaLote) {
+  // Validar stock de MP antes de comprometer cualquier lote
+  const itemsConCantidad = cantidades.filter(c => Number(c.cantidad_producida) > 0)
+  if (itemsConCantidad.length > 0) {
+    const check = await checkMPParaOrden(negocioId, itemsConCantidad.map(c => ({
+      producto_id: c.producto_id,
+      cantidad_planificada: Number(c.cantidad_producida),
+    })))
+    if (!check.ok) {
+      const detalle = Object.values(check.deficitGlobal)
+        .map(d => `${d.nombre} (falta ${Math.round(d.deficit * 100) / 100} ${d.unidad})`)
+        .join(', ')
+      throw new Error(`Stock insuficiente de materias primas: ${detalle}`)
+    }
+  }
+
   // 1. Actualizar cantidades producidas en los items de la orden
   for (const c of cantidades) {
     if (Number(c.cantidad_producida) <= 0) continue
@@ -993,6 +1020,36 @@ export async function completarOrden(negocioId, userId, orden, cantidades, fecha
     .update({ estado: 'completada' })
     .eq('id', orden.id)
   if (errE) throw errE
+}
+
+export async function darDeBajaLote({ negocioId, userId, loteId, productoId, productoNombre, cantidad, unidad, motivo }) {
+  const fecha = new Date().toISOString().split('T')[0]
+
+  const { error: se } = await supabase.from('salidas_produccion').insert({
+    negocio_id:      negocioId,
+    producto_id:     productoId,
+    producto_nombre: productoNombre,
+    fecha,
+    cantidad,
+    unidad,
+    notas:           `Baja: ${motivo}`,
+    creado_por:      userId,
+    lote_id:         loteId,
+    remito_id:       null,
+  })
+  if (se) throw se
+
+  const { data: pt } = await supabase
+    .from('productos_terminados')
+    .select('stock_actual')
+    .eq('id', productoId)
+    .single()
+
+  if (pt) {
+    await supabase.from('productos_terminados').update({
+      stock_actual: Math.max(0, r2(Number(pt.stock_actual) - cantidad)),
+    }).eq('id', productoId)
+  }
 }
 
 export async function cancelarOrden(ordenId) {

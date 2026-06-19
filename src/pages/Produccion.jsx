@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase, ARS, fNum, fFecha, hoy, r2 } from '../lib/supabase'
-import { useNegocio, acciones } from '../lib/negocio'
+import { useNegocio, acciones, darDeBajaLote } from '../lib/negocio'
 import { useToast } from '../contexts/ToastContext'
 import { useAuth } from '../contexts/AuthContext'
 import { PageHeader, Card, Btn, BtnSm, Badge, Modal, AnularModal, FG, Grid2, Inp, Sel, Tabs, MRow, Spinner, TH, TD, EmptyRow, InfoBox, Ic } from '../components/UI'
@@ -20,8 +20,9 @@ export default function Produccion() {
   const [loteModal, setLoteModal] = useState(false)
   const [recetaModal, setRecetaModal] = useState(null)
   const [anularModal, setAnularModal] = useState(null)
-  // NUEVO: lote seleccionado para imprimir etiquetas
   const [printModal, setPrintModal] = useState(null)
+  const [bajaModal, setBajaModal]   = useState(null) // lote a dar de baja
+  const [bajaForm, setBajaForm]     = useState({ motivo: 'Vencimiento', cantidad: '', otro: '' })
   const [saving, setSaving] = useState(false)
   const [loteForm, setLoteForm] = useState({ recetaId: '', productoId: '', fecha: hoy(), cantBatches: '1', notas: '' })
   const [rForm, setRForm] = useState({ nombre: '', rendimiento: '', unidad_rendimiento: 'kg' })
@@ -114,6 +115,37 @@ export default function Produccion() {
       toast('Lote registrado — stock actualizado', 'ok')
       setLoteModal(false)
       setFechaVencCalculada(null)
+      cargar()
+    } catch (e) {
+      toast(e.message || 'Error', 'err')
+    }
+    setSaving(false)
+  }
+
+  const openBaja = (lote) => {
+    const prod = productos.find(p => p.id === lote.producto_id)
+    setBajaModal({ ...lote, productoNombre: prod?.nombre || lote.receta_nombre, productoUnidad: prod?.unidad || lote.unidad })
+    setBajaForm({ motivo: 'Vencimiento', cantidad: '', otro: '' })
+  }
+
+  const saveBaja = async () => {
+    if (!bajaForm.cantidad || Number(bajaForm.cantidad) <= 0) return
+    const motivoFinal = bajaForm.motivo === 'Otro' ? bajaForm.otro : bajaForm.motivo
+    if (!motivoFinal.trim()) return
+    setSaving(true)
+    try {
+      await darDeBajaLote({
+        negocioId,
+        userId: usuario.id,
+        loteId: bajaModal.id,
+        productoId: bajaModal.producto_id,
+        productoNombre: bajaModal.productoNombre,
+        cantidad: Number(bajaForm.cantidad),
+        unidad: bajaModal.productoUnidad,
+        motivo: motivoFinal,
+      })
+      toast('Baja registrada — stock actualizado', 'ok')
+      setBajaModal(null)
       cargar()
     } catch (e) {
       toast(e.message || 'Error', 'err')
@@ -262,14 +294,14 @@ export default function Produccion() {
                     {/* NUEVO: acciones por lote */}
                     <td style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
                       <div style={{ display: 'flex', gap: 6 }}>
-                        {/* Botón imprimir — disponible para lotes activos */}
-                        {!l.anulado && (
-                          <BtnSm
-                            v="ghost"
-                            onClick={() => setPrintModal(l)}
-                            title="Imprimir etiquetas"
-                          >
+                            {!l.anulado && (
+                          <BtnSm v="ghost" onClick={() => setPrintModal(l)} title="Imprimir etiquetas">
                             🖨️
+                          </BtnSm>
+                        )}
+                        {!l.anulado && l.producto_id && (
+                          <BtnSm v="warn" onClick={() => openBaja(l)} title="Dar de baja (vencimiento / defecto)">
+                            Baja
                           </BtnSm>
                         )}
                         {!l.anulado && esAdmin && (
@@ -455,12 +487,52 @@ export default function Produccion() {
         />
       )}
 
-      {/* NUEVO: Modal imprimir etiquetas */}
       {printModal && (
-        <PrintLabel
-          lote={printModal}
-          onClose={() => setPrintModal(null)}
-        />
+        <PrintLabel lote={printModal} onClose={() => setPrintModal(null)} />
+      )}
+
+      {bajaModal && (
+        <Modal title={`Dar de baja — ${bajaModal.productoNombre}`} onClose={() => setBajaModal(null)}>
+          <InfoBox type="warn">
+            Esta acción descuenta stock del producto sin generar un remito. Usala para mermas, vencimientos o producto defectuoso.
+          </InfoBox>
+          <div style={{ fontSize: 13, color: 'var(--muted)', margin: '10px 0 2px' }}>
+            Lote: {fFecha(bajaModal.fecha)} · Producido: {fNum(bajaModal.total_producido)} {bajaModal.productoUnidad}
+          </div>
+          <FG label="Motivo" required>
+            <Sel value={bajaForm.motivo} onChange={e => setBajaForm(f => ({ ...f, motivo: e.target.value }))}>
+              <option>Vencimiento</option>
+              <option>Producto defectuoso</option>
+              <option>Rotura / accidente</option>
+              <option>Consumo interno</option>
+              <option>Otro</option>
+            </Sel>
+          </FG>
+          {bajaForm.motivo === 'Otro' && (
+            <FG label="Especificá el motivo">
+              <Inp value={bajaForm.otro} onChange={e => setBajaForm(f => ({ ...f, otro: e.target.value }))} placeholder="Describí el motivo..." />
+            </FG>
+          )}
+          <FG label={`Cantidad a dar de baja (${bajaModal.productoUnidad})`} required>
+            <Inp
+              type="number" min="0.01" step="0.01"
+              value={bajaForm.cantidad}
+              onChange={e => setBajaForm(f => ({ ...f, cantidad: e.target.value }))}
+              placeholder={`Máx: ${fNum(bajaModal.total_producido)}`}
+            />
+          </FG>
+          <MRow>
+            <Btn v="ghost" onClick={() => setBajaModal(null)}>Cancelar</Btn>
+            <Btn
+              v="warn"
+              onClick={saveBaja}
+              loading={saving}
+              disabled={!bajaForm.cantidad || Number(bajaForm.cantidad) <= 0 || (bajaForm.motivo === 'Otro' && !bajaForm.otro.trim())}
+            >
+              Confirmar baja
+            </Btn>
+          </MRow>
+        </Modal>
       )}
     </div>
   )

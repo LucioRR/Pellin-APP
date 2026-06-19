@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { supabase, ARS, fNum, fFecha, hoy, r2 } from '../lib/supabase'
+import { supabase, ARS, fNum, fFecha, r2 } from '../lib/supabase'
 import { useNegocio, acciones } from '../lib/negocio'
 import { useToast } from '../contexts/ToastContext'
 import { useAuth } from '../contexts/AuthContext'
@@ -15,11 +15,9 @@ export default function Productos() {
   const [recetas, setRecetas] = useState([])
   const [cargando, setCargando] = useState(true)
   const [modal, setModal] = useState(null)
-  const [salidaModal, setSalidaModal] = useState(null)
   const [anularModal, setAnularModal] = useState(null)
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({ nombre: '', unidad: 'kg', stock_minimo: '', receta_id: '', vida_util_dias: null })
-  const [salidaForm, setSalidaForm] = useState({ productoId: '', cantidad: '', fecha: hoy(), notas: '' })
   const [lotesProducto, setLotesProducto] = useState([])
   const [loadingLotes, setLoadingLotes] = useState(false)
   const [productoDetalle, setProductoDetalle] = useState(null)
@@ -74,32 +72,6 @@ export default function Productos() {
     setModal(null); setSaving(false); cargar()
   }
 
-  const openSalida = (p) => {
-    setSalidaForm({ productoId: p.id, productoNombre: p.nombre, unidad: p.unidad, cantidad: '', fecha: hoy(), notas: '' })
-    setSalidaModal(p)
-  }
-
-  const saveSalida = async () => {
-    if (!salidaForm.cantidad) return
-    setSaving(true)
-    try {
-      await acciones.registrarSalida({
-        negocioId, userId: usuario.id,
-        productoId: salidaModal.id,
-        productoNombre: salidaModal.nombre,
-        fecha: salidaForm.fecha,
-        cantidad: +salidaForm.cantidad,
-        unidad: salidaModal.unidad,
-        notas: salidaForm.notas,
-      })
-      toast('Salida registrada', 'ok')
-      setSalidaModal(null); cargar()
-    } catch (e) {
-      toast(e.message || 'Error', 'err')
-    }
-    setSaving(false)
-  }
-
   const anularSalida = async (motivo) => {
     setSaving(true)
     try {
@@ -139,19 +111,8 @@ export default function Productos() {
     <div>
       <PageHeader title="Productos Terminados"
         action={tab === 'stock'
-          ? (
-            <div style={{ display: 'flex', gap: 8 }}>
-              <Btn onClick={openAdd}><Ic n="plus" s={14} c="#fff" /> Nuevo producto</Btn>
-            </div>
-          )
-          : (
-            <Btn
-              onClick={() => { setSalidaForm({ productoId: productos[0]?.id || '', cantidad: '', fecha: hoy(), notas: '' }); setSalidaModal(productos[0] || null) }}
-              disabled={productos.length === 0}
-            >
-              <Ic n="arrow" s={14} c="#fff" /> Registrar salida
-            </Btn>
-          )
+          ? <Btn onClick={openAdd}><Ic n="plus" s={14} c="#fff" /> Nuevo producto</Btn>
+          : null
         }
       />
 
@@ -187,7 +148,6 @@ export default function Productos() {
                     <TD><Badge type={bajo ? 'err' : 'ok'}>{bajo ? 'Bajo mínimo' : 'OK'}</Badge></TD>
                     <td style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
                       <div style={{ display: 'flex', gap: 6 }}>
-                        <BtnSm onClick={() => openSalida(p)} title="Registrar salida a venta"><Ic n="arrow" s={12} /> Salida</BtnSm>
                         <BtnSm v="ghost" onClick={() => cargarLotesProducto(p)} title="Ver lotes"><Ic n="list" s={12} /> Lotes</BtnSm>
                         <BtnSm onClick={() => openEdit(p)}><Ic n="edit" s={12} /></BtnSm>
                       </div>
@@ -201,6 +161,10 @@ export default function Productos() {
       )}
 
       {tab === 'salidas' && (
+        <>
+        <InfoBox type="info" style={{ marginBottom: 14 }}>
+          Para registrar ventas usá <strong>Pedidos</strong> o <strong>Remitos</strong>. Para mermas o vencimientos usá el botón <strong>Baja</strong> en cada lote dentro de Producción.
+        </InfoBox>
         <Card>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
@@ -237,6 +201,7 @@ export default function Productos() {
             </tbody>
           </table>
         </Card>
+        </>
       )}
 
       {/* Modal agregar/editar producto */}
@@ -268,27 +233,6 @@ export default function Productos() {
           <MRow>
             <Btn v="ghost" onClick={() => setModal(null)}>Cancelar</Btn>
             <Btn onClick={save} loading={saving}>Guardar</Btn>
-          </MRow>
-        </Modal>
-      )}
-
-      {/* Modal registrar salida */}
-      {salidaModal && (
-        <Modal title={`Registrar Salida — ${salidaModal.nombre}`} onClose={() => setSalidaModal(null)}>
-          <p style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 16 }}>
-            Stock disponible: <strong>{fNum(salidaModal.stock_actual)} {salidaModal.unidad}</strong>
-          </p>
-          <InfoBox type="info">Esta salida representa unidades enviadas al sistema de ventas. Reduce el stock en depósito.</InfoBox>
-          <FG label="Cantidad a despachar" required>
-            <Inp type="number" value={salidaForm.cantidad} onChange={e => setSalidaForm(x => ({ ...x, cantidad: e.target.value }))} max={salidaModal.stock_actual} />
-          </FG>
-          <Grid2>
-            <FG label="Fecha"><Inp type="date" value={salidaForm.fecha} onChange={e => setSalidaForm(x => ({ ...x, fecha: e.target.value }))} /></FG>
-            <FG label="Notas"><Inp value={salidaForm.notas} onChange={e => setSalidaForm(x => ({ ...x, notas: e.target.value }))} /></FG>
-          </Grid2>
-          <MRow>
-            <Btn v="ghost" onClick={() => setSalidaModal(null)}>Cancelar</Btn>
-            <Btn onClick={saveSalida} loading={saving} disabled={!salidaForm.cantidad || +salidaForm.cantidad > salidaModal.stock_actual}>Confirmar salida</Btn>
           </MRow>
         </Modal>
       )}

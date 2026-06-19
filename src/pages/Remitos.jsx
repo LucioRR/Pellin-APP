@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { supabase, fFecha, hoy } from '../lib/supabase'
+import { supabase, fFecha, fNum, ARS, hoy } from '../lib/supabase'
 import { useNegocio } from '../lib/negocio'
 import { useAuth } from '../contexts/AuthContext'
 import { useToast } from '../contexts/ToastContext'
@@ -11,8 +11,6 @@ import {
 } from '../components/UI'
 
 const padNum = (n) => String(n).padStart(4, '0')
-const ARS = (n) => `$${Number(n || 0).toLocaleString('es-AR')}`
-const fNum = (n) => Number(n || 0).toLocaleString('es-AR', { maximumFractionDigits: 2 })
 
 // ── Componente de impresión ────────────────────────────────────────────────
 function PrintRemito({ remito, items, negocioNombre }) {
@@ -184,14 +182,16 @@ export default function Remitos() {
   // y reparte la cantidad pedida entre lotes de más antiguo a más nuevo.
   // Devuelve un array de líneas listas para insertar en salidas_produccion.
   const calcularFIFO = async () => {
-    const lineas = [] // { productoId, productoNombre, unidad, loteId, loteDate, loteVenc, cantidad }
+    const lineas = []
 
     for (const it of items) {
       const prod = productos.find(p => p.id === it.productoId)
       if (!prod) continue
-      const cantidadPedida = Number(it.cantidad)
 
-      // 1. Cargar lotes del producto ordenados por fecha ASC (FIFO)
+      // stock_actual es la fuente de verdad: incluye salidas sin lote (manuales, bajas)
+      const stockReal = Math.max(0, Number(prod.stock_actual || 0))
+      const aDistribuir = Math.min(Number(it.cantidad), stockReal)
+
       const { data: lotes } = await supabase
         .from('lotes')
         .select('id, fecha, total_producido, fecha_vencimiento')
@@ -201,68 +201,42 @@ export default function Remitos() {
         .order('fecha', { ascending: true })
 
       if (!lotes || lotes.length === 0) {
-        // Sin lotes registrados: insertar salida sin lote_id (fallback)
         lineas.push({
-          productoId: it.productoId,
-          productoNombre: it.productoNombre,
-          unidad: it.unidad,
-          loteId: null,
-          loteDate: null,
-          loteVenc: null,
-          cantidad: cantidadPedida,
-          sinLote: true,
+          productoId: it.productoId, productoNombre: it.productoNombre,
+          unidad: it.unidad, loteId: null, loteDate: null, loteVenc: null,
+          cantidad: aDistribuir, sinLote: true,
         })
         continue
       }
 
-      // 2. Para cada lote, calcular stock disponible real
-      //    = total_producido - SUM(salidas activas con ese lote_id)
       const lotesConStock = await Promise.all(lotes.map(async (lote) => {
         const { data: salidas } = await supabase
-          .from('salidas_produccion')
-          .select('cantidad')
-          .eq('lote_id', lote.id)
-          .eq('anulada', false)
-
+          .from('salidas_produccion').select('cantidad')
+          .eq('lote_id', lote.id).eq('anulada', false)
         const consumido = (salidas || []).reduce((s, sal) => s + Number(sal.cantidad), 0)
         const disponible = Math.round((Number(lote.total_producido) - consumido) * 100) / 100
         return { ...lote, disponible: Math.max(0, disponible) }
       }))
 
-      // 3. Distribuir la cantidad pedida entre lotes (FIFO)
-      let restante = cantidadPedida
+      let restante = aDistribuir
 
       for (const lote of lotesConStock) {
         if (restante <= 0) break
         if (lote.disponible <= 0) continue
-
         const tomar = Math.min(restante, lote.disponible)
         restante = Math.round((restante - tomar) * 100) / 100
-
         lineas.push({
-          productoId: it.productoId,
-          productoNombre: it.productoNombre,
-          unidad: it.unidad,
-          loteId: lote.id,
-          loteDate: lote.fecha,
-          loteVenc: lote.fecha_vencimiento,
-          cantidad: tomar,
-          sinLote: false,
+          productoId: it.productoId, productoNombre: it.productoNombre,
+          unidad: it.unidad, loteId: lote.id, loteDate: lote.fecha,
+          loteVenc: lote.fecha_vencimiento, cantidad: tomar, sinLote: false,
         })
       }
 
-      // Si sobra cantidad (stock insuficiente en lotes) agregar línea sin lote como aviso
       if (restante > 0) {
         lineas.push({
-          productoId: it.productoId,
-          productoNombre: it.productoNombre,
-          unidad: it.unidad,
-          loteId: null,
-          loteDate: null,
-          loteVenc: null,
-          cantidad: restante,
-          sinLote: true,
-          sinStockEnLotes: true,
+          productoId: it.productoId, productoNombre: it.productoNombre,
+          unidad: it.unidad, loteId: null, loteDate: null, loteVenc: null,
+          cantidad: restante, sinLote: true, sinStockEnLotes: true,
         })
       }
     }

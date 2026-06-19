@@ -6,19 +6,48 @@ import { useToast } from '../contexts/ToastContext'
 import { PageHeader, Card, Btn, BtnSm, Badge, Modal, FG, Grid2, Inp, Sel, Tabs, MRow, Spinner, TH, TD, EmptyRow, Ic, InfoBox } from '../components/UI'
 import { getPrintConfig, setPrintConfig, probarConexionQZ } from '../lib/usePrintLabel'
 
-const MODULOS = [
-  { id: 'dashboard', label: 'Panel General' },
-  { id: 'dashboard_operativo', label: 'Panel del día' },
-  { id: 'materias', label: 'Materias Primas' },
-  { id: 'proveedores', label: 'Proveedores' },
-  { id: 'compras', label: 'Compras' },
-  { id: 'produccion', label: 'Producción' },
-  { id: 'ordenes_produccion', label: 'Órdenes de Producción' },
-  { id: 'productos', label: 'Productos Terminados' },
-  { id: 'caja', label: 'Caja' },
-  { id: 'estadisticas', label: 'Estadísticas' },
-  { id: 'configuracion', label: 'Configuración' },
+const GRUPOS_MODULOS = [
+  {
+    label: 'General',
+    modulos: [
+      { id: 'dashboard',           label: 'Panel General' },
+      { id: 'dashboard_operativo', label: 'Panel del día' },
+      { id: 'estadisticas',        label: 'Estadísticas' },
+    ],
+  },
+  {
+    label: 'Abastecimiento',
+    modulos: [
+      { id: 'proveedores', label: 'Proveedores' },
+      { id: 'materias',    label: 'Materias Primas' },
+      { id: 'compras',     label: 'Compras' },
+    ],
+  },
+  {
+    label: 'Operaciones productivas',
+    modulos: [
+      { id: 'produccion',         label: 'Producción' },
+      { id: 'ordenes_produccion', label: 'Órdenes de Producción' },
+      { id: 'productos',          label: 'Productos Terminados' },
+    ],
+  },
+  {
+    label: 'Ventas',
+    modulos: [
+      { id: 'pedidos',  label: 'Pedidos' },
+      { id: 'remitos',  label: 'Remitos' },
+    ],
+  },
+  {
+    label: 'Finanzas',
+    modulos: [
+      { id: 'caja', label: 'Caja' },
+    ],
+  },
 ]
+
+// Lista plana derivada — usada para asignar todos los módulos a admins
+const MODULOS = GRUPOS_MODULOS.flatMap(g => g.modulos)
 
 export default function Configuracion() {
   const { negocioId } = useNegocio()
@@ -204,7 +233,7 @@ export default function Configuracion() {
                     </div>
                   </td>
                   <TD sm color="var(--muted)">{u.email}</TD>
-                  <TD><Badge type={u.rol === 'admin' ? 'ok' : 'gray'}>{u.rol}</Badge></TD>
+                  <TD><Badge type={u.rol === 'admin' ? 'ok' : 'gray'}>{u.rol === 'admin' ? 'Admin' : 'Usuario'}</Badge></TD>
                   <TD sm color="var(--muted)">{negocios.filter(n => u.negocio_ids?.includes(n.id)).map(n => n.nombre).join(', ') || '—'}</TD>
                   <TD sm color="var(--muted)">{u.ultimo_acceso ? new Date(u.ultimo_acceso).toLocaleDateString('es-AR') : '—'}</TD>
                   <td style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
@@ -368,14 +397,14 @@ export default function Configuracion() {
               </div>
             ) : (
               <div style={{ display: 'flex', gap: 8 }}>
-                {['admin', 'operario'].map(r => (
-                  <button key={r} onClick={() => setUsuForm(f => ({ ...f, rol: r }))} style={{
+                {[{ valor: 'admin', label: 'Admin' }, { valor: 'operario', label: 'Usuario' }].map(({ valor, label }) => (
+                  <button key={valor} onClick={() => setUsuForm(f => ({ ...f, rol: valor }))} style={{
                     flex: 1, padding: '9px', borderRadius: 8, fontFamily: 'inherit',
-                    border: `2px solid ${usuForm.rol === r ? '#2D6A4F' : 'var(--border)'}`,
-                    background: usuForm.rol === r ? '#EAF7EF' : 'transparent',
+                    border: `2px solid ${usuForm.rol === valor ? '#2D6A4F' : 'var(--border)'}`,
+                    background: usuForm.rol === valor ? '#EAF7EF' : 'transparent',
                     cursor: 'pointer', fontWeight: 600, fontSize: 13,
-                    color: usuForm.rol === r ? '#2D6A4F' : 'var(--muted)',
-                  }}>{r.charAt(0).toUpperCase() + r.slice(1)}</button>
+                    color: usuForm.rol === valor ? '#2D6A4F' : 'var(--muted)',
+                  }}>{label}</button>
                 ))}
               </div>
             )}
@@ -392,13 +421,65 @@ export default function Configuracion() {
           </FG>
           {usuForm.rol === 'operario' && (
             <FG label="Módulos habilitados">
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                {MODULOS.map(m => (
-                  <label key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}>
-                    <input type="checkbox" checked={usuForm.modulos.includes(m.id)} onChange={() => toggleMod(m.id)} style={{ width: 14, height: 14 }} />
-                    {m.label}
-                  </label>
-                ))}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                {GRUPOS_MODULOS.map(grupo => {
+                  const ids = grupo.modulos.map(m => m.id)
+                  const todosActivos = ids.every(id => usuForm.modulos.includes(id))
+                  const algunoActivo = ids.some(id => usuForm.modulos.includes(id))
+                  const toggleGrupo = () => {
+                    if (todosActivos) {
+                      setUsuForm(f => ({ ...f, modulos: f.modulos.filter(id => !ids.includes(id)) }))
+                    } else {
+                      setUsuForm(f => ({ ...f, modulos: [...new Set([...f.modulos, ...ids])] }))
+                    }
+                  }
+                  return (
+                    <div key={grupo.label} style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+                      {/* Cabecera del grupo */}
+                      <div style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        padding: '8px 12px',
+                        background: algunoActivo ? '#F0F7F3' : '#FAF9F7',
+                        borderBottom: '1px solid var(--border)',
+                      }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: algunoActivo ? '#2D6A4F' : 'var(--muted)' }}>
+                          {grupo.label}
+                        </span>
+                        <button
+                          onClick={toggleGrupo}
+                          style={{
+                            fontSize: 11, fontWeight: 600, border: 'none', cursor: 'pointer',
+                            background: 'none', padding: '2px 6px', borderRadius: 4,
+                            color: todosActivos ? '#BF3030' : '#2D6A4F',
+                          }}
+                        >
+                          {todosActivos ? 'Quitar todos' : 'Seleccionar todos'}
+                        </button>
+                      </div>
+                      {/* Checkboxes del grupo */}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0 }}>
+                        {grupo.modulos.map((m, i) => (
+                          <label key={m.id} style={{
+                            display: 'flex', alignItems: 'center', gap: 8,
+                            cursor: 'pointer', fontSize: 13,
+                            padding: '8px 12px',
+                            borderTop: i >= 2 ? '1px solid var(--border)' : undefined,
+                            borderRight: i % 2 === 0 ? '1px solid var(--border)' : undefined,
+                            background: usuForm.modulos.includes(m.id) ? '#F6FBF8' : 'transparent',
+                          }}>
+                            <input
+                              type="checkbox"
+                              checked={usuForm.modulos.includes(m.id)}
+                              onChange={() => toggleMod(m.id)}
+                              style={{ width: 14, height: 14, accentColor: '#2D6A4F' }}
+                            />
+                            {m.label}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             </FG>
           )}
