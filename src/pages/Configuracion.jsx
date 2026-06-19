@@ -61,10 +61,13 @@ export default function Configuracion() {
   const [modal, setModal] = useState(null)
   const [usuModal, setUsuModal] = useState(null)
   const [catModal, setCatModal] = useState(null)
+  const [invModal, setInvModal] = useState(false)
+  const [invitaciones, setInvitaciones] = useState([])
   const [saving, setSaving] = useState(false)
   const [negForm, setNegForm] = useState({ nombre: '', tipo: 'generico' })
   const [usuForm, setUsuForm] = useState({ rol: 'operario', negocio_ids: [], modulos: [] })
   const [catForm, setCatForm] = useState({ tipo: 'ingreso', nombre: '' })
+  const [invForm, setInvForm] = useState({ email: '', nombre: '', rol: 'operario', negocio_ids: [], modulos: [] })
 
   // ── Estado impresora ────────────────────────────────────────────────────────
   const [printCfg, setPrintCfg] = useState(() => getPrintConfig())
@@ -75,14 +78,16 @@ export default function Configuracion() {
 
   const cargar = async () => {
     setCargando(true)
-    const [{ data: ns }, { data: us }, { data: cs }] = await Promise.all([
+    const [{ data: ns }, { data: us }, { data: cs }, { data: invs }] = await Promise.all([
       supabase.from('negocios').select('*').eq('activo', true).order('nombre'),
       supabase.from('usuarios').select('*').eq('activo', true).order('nombre'),
       supabase.from('categorias_caja').select('*').eq('negocio_id', negocioId).order('tipo').order('nombre'),
+      supabase.from('invitaciones').select('*').order('creado_en', { ascending: false }),
     ])
     setNegocios(ns || [])
     setUsuarios(us || [])
     setCategorias(cs || [])
+    setInvitaciones(invs || [])
     setCargando(false)
   }
 
@@ -141,6 +146,40 @@ export default function Configuracion() {
     toast('Usuario desactivado', 'ok'); cargar()
   }
 
+  // Invitaciones
+  const openInv = () => {
+    setInvForm({ email: '', nombre: '', rol: 'operario', negocio_ids: [], modulos: [] })
+    setInvModal(true)
+  }
+  const toggleInvNeg = (id) => setInvForm(f => ({ ...f, negocio_ids: f.negocio_ids.includes(id) ? f.negocio_ids.filter(x => x !== id) : [...f.negocio_ids, id] }))
+  const toggleInvMod = (id) => setInvForm(f => ({ ...f, modulos: f.modulos.includes(id) ? f.modulos.filter(x => x !== id) : [...f.modulos, id] }))
+  const saveInv = async () => {
+    const email = invForm.email.trim().toLowerCase()
+    if (!email || !email.includes('@')) { toast('Ingresá un email válido', 'err'); return }
+    if (!invForm.negocio_ids.length) { toast('Seleccioná al menos un negocio', 'err'); return }
+    setSaving(true)
+    const modulosFinales = invForm.rol === 'admin' ? MODULOS.map(m => m.id) : invForm.modulos
+    const { error } = await supabase.from('invitaciones').insert({
+      email,
+      nombre: invForm.nombre.trim() || null,
+      rol: invForm.rol,
+      modulos: modulosFinales,
+      negocio_ids: invForm.negocio_ids,
+      creado_por: usuario.id,
+    })
+    if (error) {
+      toast(error.code === '23505' ? 'Ya existe una invitación para ese email' : 'Error al guardar', 'err')
+      setSaving(false); return
+    }
+    toast('Invitación creada. El usuario podrá ingresar con su cuenta de Google.', 'ok')
+    setInvModal(false); setSaving(false); cargar()
+  }
+  const eliminarInv = async (inv) => {
+    if (!confirm(`¿Eliminar la invitación de ${inv.email}?`)) return
+    await supabase.from('invitaciones').delete().eq('id', inv.id)
+    toast('Invitación eliminada', 'ok'); cargar()
+  }
+
   // Categorías
   const openCat = (c) => { setCatForm({ tipo: c.tipo, nombre: c.nombre }); setCatModal(c) }
   const openAddCat = () => { setCatForm({ tipo: 'ingreso', nombre: '' }); setCatModal('add') }
@@ -188,6 +227,7 @@ export default function Configuracion() {
         tabs={[
           ['negocios', 'Negocios'],
           ['usuarios', 'Usuarios'],
+          ['invitaciones', 'Invitaciones'],
           ['categorias', 'Categorías de Caja'],
           ['impresora', 'Impresora'],
         ]}
@@ -247,6 +287,38 @@ export default function Configuracion() {
             </tbody>
           </table>
         </Card>
+      )}
+
+      {/* Invitaciones */}
+      {tab === 'invitaciones' && (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 14 }}>
+            <Btn onClick={openInv}><Ic n="plus" s={14} c="#fff" /> Nueva invitación</Btn>
+          </div>
+          <InfoBox type="info" style={{ marginBottom: 14 }}>
+            Al crear una invitación, el usuario podrá ingresar por primera vez con su cuenta de Google usando ese email. Su perfil se creará automáticamente con el rol y permisos que definas acá.
+          </InfoBox>
+          <Card>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead><tr><TH>Email</TH><TH>Nombre</TH><TH>Rol</TH><TH>Negocios</TH><TH>Creada</TH><TH></TH></tr></thead>
+              <tbody>
+                {invitaciones.length === 0 && <EmptyRow cols={6} msg="Sin invitaciones pendientes" />}
+                {invitaciones.map(inv => (
+                  <tr key={inv.id}>
+                    <TD bold>{inv.email}</TD>
+                    <TD sm color="var(--muted)">{inv.nombre || '—'}</TD>
+                    <TD><Badge type={inv.rol === 'admin' ? 'ok' : 'gray'}>{inv.rol === 'admin' ? 'Admin' : 'Usuario'}</Badge></TD>
+                    <TD sm color="var(--muted)">{negocios.filter(n => inv.negocio_ids?.includes(n.id)).map(n => n.nombre).join(', ') || '—'}</TD>
+                    <TD sm color="var(--muted)">{new Date(inv.creado_en).toLocaleDateString('es-AR')}</TD>
+                    <td style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
+                      <BtnSm v="danger" onClick={() => eliminarInv(inv)}><Ic n="trash" s={12} c="#BF3030" /></BtnSm>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        </div>
       )}
 
       {/* Categorías */}
@@ -484,6 +556,110 @@ export default function Configuracion() {
             </FG>
           )}
           <MRow><Btn v="ghost" onClick={() => setUsuModal(null)}>Cancelar</Btn><Btn onClick={saveUsu} loading={saving}>Guardar</Btn></MRow>
+        </Modal>
+      )}
+
+      {/* Modal invitación */}
+      {invModal && (
+        <Modal title="Nueva Invitación" onClose={() => setInvModal(false)}>
+          <FG label="Email" required>
+            <Inp
+              type="email"
+              value={invForm.email}
+              onChange={e => setInvForm(f => ({ ...f, email: e.target.value }))}
+              placeholder="usuario@gmail.com"
+            />
+          </FG>
+          <FG label="Nombre (opcional)">
+            <Inp
+              value={invForm.nombre}
+              onChange={e => setInvForm(f => ({ ...f, nombre: e.target.value }))}
+              placeholder="Se usará si el usuario no tiene nombre en Google"
+            />
+          </FG>
+          <FG label="Rol">
+            <div style={{ display: 'flex', gap: 8 }}>
+              {[{ valor: 'admin', label: 'Admin' }, { valor: 'operario', label: 'Usuario' }].map(({ valor, label }) => (
+                <button key={valor} onClick={() => setInvForm(f => ({ ...f, rol: valor }))} style={{
+                  flex: 1, padding: '9px', borderRadius: 8, fontFamily: 'inherit',
+                  border: `2px solid ${invForm.rol === valor ? '#2D6A4F' : 'var(--border)'}`,
+                  background: invForm.rol === valor ? '#EAF7EF' : 'transparent',
+                  cursor: 'pointer', fontWeight: 600, fontSize: 13,
+                  color: invForm.rol === valor ? '#2D6A4F' : 'var(--muted)',
+                }}>{label}</button>
+              ))}
+            </div>
+          </FG>
+          <FG label="Negocios con acceso">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {negocios.map(n => (
+                <label key={n.id} style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 14 }}>
+                  <input type="checkbox" checked={invForm.negocio_ids.includes(n.id)} onChange={() => toggleInvNeg(n.id)} style={{ width: 16, height: 16 }} />
+                  {n.nombre}
+                </label>
+              ))}
+            </div>
+          </FG>
+          {invForm.rol === 'operario' && (
+            <FG label="Módulos habilitados">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                {GRUPOS_MODULOS.map(grupo => {
+                  const ids = grupo.modulos.map(m => m.id)
+                  const todosActivos = ids.every(id => invForm.modulos.includes(id))
+                  const algunoActivo = ids.some(id => invForm.modulos.includes(id))
+                  const toggleGrupo = () => {
+                    if (todosActivos) {
+                      setInvForm(f => ({ ...f, modulos: f.modulos.filter(id => !ids.includes(id)) }))
+                    } else {
+                      setInvForm(f => ({ ...f, modulos: [...new Set([...f.modulos, ...ids])] }))
+                    }
+                  }
+                  return (
+                    <div key={grupo.label} style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+                      <div style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        padding: '8px 12px',
+                        background: algunoActivo ? '#F0F7F3' : '#FAF9F7',
+                        borderBottom: '1px solid var(--border)',
+                      }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: algunoActivo ? '#2D6A4F' : 'var(--muted)' }}>
+                          {grupo.label}
+                        </span>
+                        <button onClick={toggleGrupo} style={{
+                          fontSize: 11, fontWeight: 600, border: 'none', cursor: 'pointer',
+                          background: 'none', padding: '2px 6px', borderRadius: 4,
+                          color: todosActivos ? '#BF3030' : '#2D6A4F',
+                        }}>
+                          {todosActivos ? 'Quitar todos' : 'Seleccionar todos'}
+                        </button>
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0 }}>
+                        {grupo.modulos.map((m, i) => (
+                          <label key={m.id} style={{
+                            display: 'flex', alignItems: 'center', gap: 8,
+                            cursor: 'pointer', fontSize: 13,
+                            padding: '8px 12px',
+                            borderTop: i >= 2 ? '1px solid var(--border)' : undefined,
+                            borderRight: i % 2 === 0 ? '1px solid var(--border)' : undefined,
+                            background: invForm.modulos.includes(m.id) ? '#F6FBF8' : 'transparent',
+                          }}>
+                            <input
+                              type="checkbox"
+                              checked={invForm.modulos.includes(m.id)}
+                              onChange={() => toggleInvMod(m.id)}
+                              style={{ width: 14, height: 14, accentColor: '#2D6A4F' }}
+                            />
+                            {m.label}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </FG>
+          )}
+          <MRow><Btn v="ghost" onClick={() => setInvModal(false)}>Cancelar</Btn><Btn onClick={saveInv} loading={saving}>Crear invitación</Btn></MRow>
         </Modal>
       )}
 

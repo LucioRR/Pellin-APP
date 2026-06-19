@@ -8,18 +8,50 @@ export function AuthProvider({ children }) {
   const [usuario, setUsuario]     = useState(null)
   const [negocios, setNegocios]   = useState([])
   const [negocioActivo, setNegocioActivoState] = useState(null)
+  const [accesoNegado, setAccesoNegado] = useState(false)
 
   // Cargar datos del usuario y sus negocios
   const cargarUsuario = useCallback(async (userId) => {
-    const { data: usr } = await supabase
+    // 1. Buscar usuario existente por ID de auth
+    let { data: usr } = await supabase
       .from('usuarios')
       .select('*')
       .eq('id', userId)
       .single()
 
-    if (!usr) return
+    // 2. Si no existe, intentar reclamar una invitación pendiente
+    if (!usr) {
+      const { data: { user: authUser } } = await supabase.auth.getUser()
+      const nombre = authUser?.user_metadata?.full_name
+        || authUser?.user_metadata?.name
+        || authUser?.email?.split('@')[0]
+        || 'Usuario'
+      const avatarUrl = authUser?.user_metadata?.avatar_url || null
 
-    // Actualizar último acceso
+      const { data: claim } = await supabase.rpc('reclamar_invitacion', {
+        p_nombre: nombre,
+        p_avatar_url: avatarUrl,
+      })
+
+      if (claim?.ok) {
+        // Re-fetch para obtener el registro recién creado
+        const { data: nuevo } = await supabase
+          .from('usuarios')
+          .select('*')
+          .eq('id', userId)
+          .single()
+        usr = nuevo
+      }
+    }
+
+    // 3. Si sigue sin encontrarse → acceso denegado
+    if (!usr) {
+      setAccesoNegado(true)
+      await supabase.auth.signOut()
+      return
+    }
+
+    // 4. Actualizar último acceso
     await supabase
       .from('usuarios')
       .update({ ultimo_acceso: new Date().toISOString() })
@@ -27,7 +59,7 @@ export function AuthProvider({ children }) {
 
     setUsuario(usr)
 
-    // Cargar negocios del usuario
+    // 5. Cargar negocios del usuario
     if (usr.negocio_ids?.length) {
       const { data: negs } = await supabase
         .from('negocios')
@@ -61,19 +93,20 @@ export function AuthProvider({ children }) {
         setUsuario(null)
         setNegocios([])
         setNegocioActivoState(null)
+        // No resetear accesoNegado aquí: debe persistir para mostrar el mensaje
       }
     })
 
     return () => subscription.unsubscribe()
   }, [cargarUsuario])
 
-  const loginConGoogle = () =>
-    supabase.auth.signInWithOAuth({
+  const loginConGoogle = () => {
+    setAccesoNegado(false) // Limpiar error al reintentar
+    return supabase.auth.signInWithOAuth({
       provider: 'google',
-      options: {
-        redirectTo: window.location.origin,
-      },
+      options: { redirectTo: window.location.origin },
     })
+  }
 
   const logout = () => supabase.auth.signOut()
 
@@ -105,6 +138,7 @@ export function AuthProvider({ children }) {
       tieneAcceso,
       esAdmin,
       cargando,
+      accesoNegado,
       recargarUsuario: () => session?.user && cargarUsuario(session.user.id),
     }}>
       {children}

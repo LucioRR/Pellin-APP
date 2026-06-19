@@ -1,7 +1,7 @@
 import { useAuth } from '../contexts/AuthContext'
 
 export default function Login() {
-  const { loginConGoogle } = useAuth()
+  const { loginConGoogle, accesoNegado } = useAuth()
 
   return (
     <div style={{
@@ -30,9 +30,24 @@ export default function Login() {
           color: '#1A1A18', marginBottom: 8,
         }}>Sistema de Gestión</h1>
 
-        <p style={{ color: '#6C6659', fontSize: 14, marginBottom: 36, lineHeight: 1.6 }}>
-          Accedé con tu cuenta de Google para continuar.
-        </p>
+        {accesoNegado ? (
+          <div style={{
+            background: '#FDECEA', border: '1px solid #F5C0C0',
+            borderRadius: 10, padding: '14px 16px', marginBottom: 28, textAlign: 'left',
+          }}>
+            <div style={{ fontWeight: 700, color: '#BF3030', fontSize: 14, marginBottom: 4 }}>
+              Acceso no autorizado
+            </div>
+            <div style={{ color: '#8B2020', fontSize: 13, lineHeight: 1.5 }}>
+              Tu cuenta de Google no está registrada en el sistema.
+              Pedile al administrador que te agregue como usuario invitado.
+            </div>
+          </div>
+        ) : (
+          <p style={{ color: '#6C6659', fontSize: 14, marginBottom: 36, lineHeight: 1.6 }}>
+            Accedé con tu cuenta de Google para continuar.
+          </p>
+        )}
 
         <button
           onClick={loginConGoogle}
