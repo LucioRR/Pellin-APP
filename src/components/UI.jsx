@@ -126,13 +126,13 @@ const inputStyle = {
   transition: 'border-color .15s, box-shadow .15s',
 }
 
-export const Inp = ({ value, onChange, type = 'text', placeholder, list, min, max, step, readOnly, style = {} }) => (
+export const Inp = ({ value, onChange, type = 'text', placeholder, list, min, max, step, readOnly, upper, style = {} }) => (
   <input
     type={type} value={value} onChange={onChange}
     placeholder={placeholder} list={list} min={min} max={max} step={step}
     readOnly={readOnly}
     className="app-input"
-    style={{ ...inputStyle, background: readOnly ? '#F0EBE1' : '#FDFAF6', ...style }}
+    style={{ ...inputStyle, background: readOnly ? '#F0EBE1' : '#FDFAF6', ...(upper ? { textTransform: 'uppercase' } : {}), ...style }}
   />
 )
 

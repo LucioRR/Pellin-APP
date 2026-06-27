@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { supabase, ARS, fNum, fFecha, r2, diasRestantes } from '../lib/supabase'
+import { supabase, ARS, fNum, fFecha, r2, diasRestantes, upper } from '../lib/supabase'
 import { useNegocio, acciones } from '../lib/negocio'
 import { useToast } from '../contexts/ToastContext'
 import { useAuth } from '../contexts/AuthContext'
@@ -57,7 +57,7 @@ export default function Productos() {
     setSaving(true)
     const payload = {
       negocio_id: negocioId,
-      nombre: form.nombre,
+      nombre: upper(form.nombre),
       unidad: form.unidad,
       stock_minimo: +form.stock_minimo || 0,
       receta_id: form.receta_id || null,
@@ -209,7 +209,7 @@ export default function Productos() {
       {/* Modal agregar/editar producto */}
       {modal && (
         <Modal title={modal === 'add' ? 'Nuevo Producto Terminado' : 'Editar Producto'} onClose={() => setModal(null)}>
-          <FG label="Nombre" required><Inp value={form.nombre} onChange={e => fk('nombre', e.target.value)} /></FG>
+          <FG label="Nombre" required><Inp upper value={form.nombre} onChange={e => fk('nombre', e.target.value)} /></FG>
           <Grid2>
             <FG label="Unidad"><Inp value={form.unidad} onChange={e => fk('unidad', e.target.value)} placeholder="kg, L, un..." /></FG>
             <FG label="Stock mínimo"><Inp type="number" value={form.stock_minimo} onChange={e => fk('stock_minimo', e.target.value)} /></FG>

@@ -19,7 +19,7 @@ export default function Compras() {
   const [anularModal, setAnularModal] = useState(null)
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({ numero: '', proveedorId: '', fecha: hoy(), fechaVencimiento: '', ivaMonto: '', otrosCargos: '' })
-  const [items, setItems] = useState([{ mpId: '', mpNombre: '', unidad: '', cantidad: '', precioUnitario: '' }])
+  const [items, setItems] = useState([{ mpId: '', mpNombre: '', marca: '', unidad: '', cantidad: '', precioUnitario: '', actualizaCosto: true }])
 
   useEffect(() => { if (negocioId) cargar() }, [negocioId])
 
@@ -28,7 +28,7 @@ export default function Compras() {
     const [{ data: fvs }, { data: pvs }, { data: mps }] = await Promise.all([
       supabase.from('v_facturas_estado').select('*').eq('negocio_id', negocioId).order('fecha', { ascending: false }),
       supabase.from('proveedores').select('id,nombre').eq('negocio_id', negocioId).eq('activo', true).order('nombre'),
-      supabase.from('materias_primas').select('id,nombre,unidad,precio_costo').eq('negocio_id', negocioId).eq('activo', true).order('nombre'),
+      supabase.from('materias_primas').select('id,nombre,unidad,precio_costo,marca').eq('negocio_id', negocioId).eq('activo', true).order('nombre'),
     ])
     setFacturas(fvs || [])
     setProveedores(pvs || [])
@@ -46,7 +46,7 @@ export default function Compras() {
   const updateItem = (i, k, v) => {
     if (k === 'mpId') {
       const mp = materias.find(m => m.id === v)
-      setItems(s => s.map((it, j) => j === i ? { ...it, mpId: v, mpNombre: mp?.nombre || '', unidad: mp?.unidad || '', precioUnitario: String(mp?.precio_costo || '') } : it))
+      setItems(s => s.map((it, j) => j === i ? { ...it, mpId: v, mpNombre: mp?.nombre || '', marca: mp?.marca || '', unidad: mp?.unidad || '', precioUnitario: String(mp?.precio_costo || '') } : it))
     } else {
       setItems(s => s.map((it, j) => j === i ? { ...it, [k]: v } : it))
     }
@@ -60,7 +60,7 @@ export default function Compras() {
 
   const openAdd = () => {
     setForm({ numero: '', proveedorId: proveedores[0]?.id || '', fecha: hoy(), fechaVencimiento: '', ivaMonto: '', otrosCargos: '' })
-    setItems([{ mpId: '', mpNombre: '', unidad: '', cantidad: '', precioUnitario: '' }])
+    setItems([{ mpId: '', mpNombre: '', marca: '', unidad: '', cantidad: '', precioUnitario: '', actualizaCosto: true }])
     setModal(true)
   }
 
@@ -71,7 +71,7 @@ export default function Compras() {
       await acciones.registrarFactura({
         negocioId, userId: usuario.id,
         factura: { numero: form.numero, proveedorId: form.proveedorId, fecha: form.fecha, fechaVencimiento: form.fechaVencimiento, ivaMonto, otrosCargos },
-        items: items.map(it => ({ mpId: it.mpId, mpNombre: it.mpNombre, unidad: it.unidad, cantidad: +it.cantidad, precioUnitario: +it.precioUnitario })),
+        items: items.map(it => ({ mpId: it.mpId, mpNombre: it.mpNombre, marca: it.marca, unidad: it.unidad, cantidad: +it.cantidad, precioUnitario: +it.precioUnitario, actualizaCosto: it.actualizaCosto })),
       })
       toast('Factura registrada — stock y precios actualizados', 'ok')
       setModal(false); cargar()
@@ -145,13 +145,14 @@ export default function Compras() {
               </p>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead><tr>
-                  {['Ingrediente', 'Cantidad', 'Precio Unit.', 'Subtotal'].map(h =>
+                  {['Ingrediente', 'Marca', 'Cantidad', 'Precio Unit.', 'Subtotal'].map(h =>
                     <th key={h} style={{ textAlign: 'left', padding: '7px 10px', fontSize: 11, color: 'var(--muted)', borderBottom: '1px solid var(--border)' }}>{h}</th>
                   )}
                 </tr></thead>
                 <tbody>{detalle.items?.map((it, i) => (
                   <tr key={i}>
                     <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--border)' }}>{it.mp_nombre}</td>
+                    <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--border)', color: it.marca ? 'inherit' : 'var(--muted)' }}>{it.marca || '—'}</td>
                     <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--border)' }}>{it.cantidad} {it.unidad}</td>
                     <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--border)' }}>{ARS(it.precio_unitario)}</td>
                     <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--border)', fontWeight: 700 }}>{ARS(it.subtotal)}</td>
@@ -190,32 +191,42 @@ export default function Compras() {
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14, marginTop: 4 }}>
             <div style={{ fontSize: 11, fontWeight: 600, color: '#4A4437', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Ítems</div>
             {items.map((it, i) => (
-              <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: 8, marginBottom: 8, alignItems: 'flex-end' }}>
-                <div>
-                  {i === 0 && <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4 }}>Ingrediente</div>}
-                  <SearchableSelect
-                    options={materias.map(m => ({ value: m.id, label: m.nombre, sub: `${m.unidad} · Precio actual: $${m.precio_costo}` }))}
-                    value={it.mpId}
-                    onChange={val => updateItem(i, 'mpId', val)}
-                    placeholder="Buscar ingrediente..."
-                  />
+              <div key={i} style={{ marginBottom: 10, paddingBottom: 10, borderBottom: i < items.length - 1 ? '1px dashed var(--border)' : 'none' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1.8fr 1.2fr 0.8fr 1fr auto', gap: 8, alignItems: 'flex-end' }}>
+                  <div>
+                    {i === 0 && <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4 }}>Ingrediente</div>}
+                    <SearchableSelect
+                      options={materias.map(m => ({ value: m.id, label: m.nombre, sub: `${m.unidad} · Precio actual: $${m.precio_costo}${m.marca ? ' · ' + m.marca : ''}` }))}
+                      value={it.mpId}
+                      onChange={val => updateItem(i, 'mpId', val)}
+                      placeholder="Buscar ingrediente..."
+                    />
+                  </div>
+                  <div>
+                    {i === 0 && <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4 }}>Marca</div>}
+                    <Inp upper value={it.marca} onChange={e => updateItem(i, 'marca', e.target.value)} placeholder="Marca" />
+                  </div>
+                  <div>
+                    {i === 0 && <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4 }}>Cantidad</div>}
+                    <Inp type="number" value={it.cantidad} onChange={e => updateItem(i, 'cantidad', e.target.value)} placeholder="0" />
+                  </div>
+                  <div>
+                    {i === 0 && <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4 }}>Precio unit. ($)</div>}
+                    <Inp type="number" value={it.precioUnitario} onChange={e => updateItem(i, 'precioUnitario', e.target.value)} placeholder="0" />
+                  </div>
+                  <button onClick={() => setItems(s => s.filter((_, j) => j !== i))}
+                    disabled={items.length === 1}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#BF3030', padding: '9px 6px', opacity: items.length === 1 ? 0.3 : 1 }}>
+                    <Ic n="x" s={16} c="#BF3030" />
+                  </button>
                 </div>
-                <div>
-                  {i === 0 && <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4 }}>Cantidad</div>}
-                  <Inp type="number" value={it.cantidad} onChange={e => updateItem(i, 'cantidad', e.target.value)} placeholder="0" />
-                </div>
-                <div>
-                  {i === 0 && <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4 }}>Precio unit. ($)</div>}
-                  <Inp type="number" value={it.precioUnitario} onChange={e => updateItem(i, 'precioUnitario', e.target.value)} placeholder="0" />
-                </div>
-                <button onClick={() => setItems(s => s.filter((_, j) => j !== i))}
-                  disabled={items.length === 1}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#BF3030', padding: '9px 6px', opacity: items.length === 1 ? 0.3 : 1 }}>
-                  <Ic n="x" s={16} c="#BF3030" />
-                </button>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, fontSize: 12, color: 'var(--muted)', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={it.actualizaCosto} onChange={e => updateItem(i, 'actualizaCosto', e.target.checked)} style={{ cursor: 'pointer' }} />
+                  Este precio actualiza el costo, la marca y el proveedor en la ficha del ingrediente
+                </label>
               </div>
             ))}
-            <button onClick={() => setItems(s => [...s, { mpId: '', mpNombre: '', unidad: '', cantidad: '', precioUnitario: '' }])}
+            <button onClick={() => setItems(s => [...s, { mpId: '', mpNombre: '', marca: '', unidad: '', cantidad: '', precioUnitario: '', actualizaCosto: true }])}
               style={{ background: 'none', border: '1px dashed var(--border)', borderRadius: 8, padding: '7px 14px', cursor: 'pointer', fontSize: 13, color: '#2D6A4F', width: '100%', marginTop: 4, fontFamily: 'inherit' }}>
               + Agregar ítem
             </button>

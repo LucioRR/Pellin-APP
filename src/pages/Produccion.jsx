@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { supabase, ARS, fNum, fFecha, hoy, r2, diasRestantes } from '../lib/supabase'
+import { supabase, ARS, fNum, fFecha, hoy, r2, diasRestantes, upper } from '../lib/supabase'
 import { useNegocio, acciones, darDeBajaLote } from '../lib/negocio'
 import { useToast } from '../contexts/ToastContext'
 import { useAuth } from '../contexts/AuthContext'
@@ -194,11 +194,11 @@ export default function Produccion() {
     setSaving(true)
     try {
       if (recetaModal === 'add') {
-        const { data: rec, error } = await supabase.from('recetas').insert({ negocio_id: negocioId, nombre: rForm.nombre, rendimiento: +rForm.rendimiento, unidad_rendimiento: rForm.unidad_rendimiento }).select().single()
+        const { data: rec, error } = await supabase.from('recetas').insert({ negocio_id: negocioId, nombre: upper(rForm.nombre), rendimiento: +rForm.rendimiento, unidad_rendimiento: rForm.unidad_rendimiento }).select().single()
         if (error) throw error
         await supabase.from('receta_ingredientes').insert(ings.map(i => ({ receta_id: rec.id, mp_id: i.mpId, mp_nombre: i.mpNombre, cantidad: +i.cantidad, unidad: i.unidad })))
       } else {
-        await supabase.from('recetas').update({ nombre: rForm.nombre, rendimiento: +rForm.rendimiento, unidad_rendimiento: rForm.unidad_rendimiento }).eq('id', recetaModal.id)
+        await supabase.from('recetas').update({ nombre: upper(rForm.nombre), rendimiento: +rForm.rendimiento, unidad_rendimiento: rForm.unidad_rendimiento }).eq('id', recetaModal.id)
         await supabase.from('receta_ingredientes').delete().eq('receta_id', recetaModal.id)
         await supabase.from('receta_ingredientes').insert(ings.map(i => ({ receta_id: recetaModal.id, mp_id: i.mpId, mp_nombre: i.mpNombre, cantidad: +i.cantidad, unidad: i.unidad })))
       }
@@ -458,7 +458,7 @@ export default function Produccion() {
       {recetaModal && (
         <Modal title={recetaModal === 'add' ? 'Nueva Receta' : 'Editar Receta'} wide onClose={() => setRecetaModal(null)}>
           <Grid2>
-            <FG label="Nombre" required><Inp value={rForm.nombre} onChange={e => setRForm(x => ({ ...x, nombre: e.target.value }))} /></FG>
+            <FG label="Nombre" required><Inp upper value={rForm.nombre} onChange={e => setRForm(x => ({ ...x, nombre: e.target.value }))} /></FG>
             <FG label="Rendimiento por lote">
               <div style={{ display: 'flex', gap: 8 }}>
                 <Inp type="number" value={rForm.rendimiento} onChange={e => setRForm(x => ({ ...x, rendimiento: e.target.value }))} placeholder="ej: 5" />

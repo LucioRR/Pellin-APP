@@ -24,6 +24,11 @@ export const mesSel = () => hoy().slice(0, 7)
 
 export const r2 = (n) => Math.round(n * 100) / 100
 
+// Normaliza nombres ingresados manualmente a MAYÚSCULA, sin espacios sobrantes.
+// Se usa al guardar (nombre de ingrediente, marca, receta, producto, cliente, proveedor)
+// para evitar duplicados por mayúsculas/minúsculas y ruido visual en los listados.
+export const upper = (s) => (s == null ? '' : String(s).trim().toUpperCase())
+
 export const diasRestantes = (fechaVenc) => {
   if (!fechaVenc) return null
   const d = new Date()

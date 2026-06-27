@@ -1,5 +1,5 @@
 import { useAuth } from '../contexts/AuthContext'
-import { supabase, hoy, r2 } from './supabase'
+import { supabase, hoy, r2, upper } from './supabase'
 
 // Hook compartido para obtener negocioId y userId
 export function useNegocio() {
@@ -39,12 +39,13 @@ export const acciones = {
       .single()
     if (fe) throw fe
 
-    // 2. Insertar items
+    // 2. Insertar items (incluye la marca comprada en cada línea)
     const { error: ie } = await supabase.from('factura_items').insert(
       items.map(i => ({
         factura_id: fv.id,
         mp_id: i.mpId,
         mp_nombre: i.mpNombre,
+        marca: i.marca ? upper(i.marca) : null,
         cantidad: i.cantidad,
         unidad: i.unidad,
         precio_unitario: i.precioUnitario,
@@ -53,7 +54,8 @@ export const acciones = {
     )
     if (ie) throw ie
 
-    // 3. Para cada item: actualizar stock y precio
+    // 3. Para cada item: el stock SIEMPRE sube. El costo, marca y proveedor de la
+    //    ficha del ingrediente se actualizan en bloque solo si actualizaCosto está activo.
     for (const item of items) {
       const { data: mp } = await supabase
         .from('materias_primas')
@@ -65,21 +67,43 @@ export const acciones = {
 
       const nuevoStock = r2(mp.stock_actual + item.cantidad)
       const precioAnterior = mp.precio_costo
+      const marca = item.marca ? upper(item.marca) : null
 
-      await supabase.from('materias_primas').update({
-        stock_actual: nuevoStock,
-        precio_costo: item.precioUnitario,
-        precio_actualizado_en: new Date().toISOString(),
-        precio_actualizado_por: userId,
-      }).eq('id', item.mpId)
+      if (item.actualizaCosto) {
+        // Actualiza la ficha: costo + marca + proveedor habitual (juntos)
+        const updates = {
+          stock_actual: nuevoStock,
+          precio_costo: item.precioUnitario,
+          precio_actualizado_en: new Date().toISOString(),
+          precio_actualizado_por: userId,
+          proveedor_habitual_id: factura.proveedorId,
+        }
+        if (marca) updates.marca = marca
+        await supabase.from('materias_primas').update(updates).eq('id', item.mpId)
 
-      if (precioAnterior !== item.precioUnitario) {
+        if (precioAnterior !== item.precioUnitario) {
+          await supabase.from('historial_precios').insert({
+            mp_id: item.mpId,
+            precio_ant: precioAnterior,
+            precio_nvo: item.precioUnitario,
+            motivo: 'factura',
+            referencia: factura.numero,
+            proveedor_id: factura.proveedorId,
+            creado_por: userId,
+          })
+        }
+      } else {
+        // No toca la ficha: solo sube el stock y deja constancia del precio de compra
+        // en el histórico (etiquetado, con su proveedor) sin alterar el costo vigente.
+        await supabase.from('materias_primas').update({ stock_actual: nuevoStock }).eq('id', item.mpId)
+
         await supabase.from('historial_precios').insert({
           mp_id: item.mpId,
           precio_ant: precioAnterior,
           precio_nvo: item.precioUnitario,
-          motivo: 'factura',
+          motivo: 'compra_no_aplicada',
           referencia: factura.numero,
+          proveedor_id: factura.proveedorId,
           creado_por: userId,
         })
       }
@@ -143,6 +167,7 @@ export const acciones = {
           precio_nvo: ultimoHist.precio_ant,
           motivo: 'anulacion_factura',
           referencia: factura.numero,
+          proveedor_id: ultimoHist.proveedor_id || null,
           creado_por: userId,
         })
       }

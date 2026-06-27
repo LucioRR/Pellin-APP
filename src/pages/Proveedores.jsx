@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { supabase, ARS, fFecha, hoy } from '../lib/supabase'
+import { supabase, ARS, fFecha, hoy, upper } from '../lib/supabase'
 import { useNegocio, acciones } from '../lib/negocio'
 import { useToast } from '../contexts/ToastContext'
 import { useAuth } from '../contexts/AuthContext'
@@ -53,7 +53,7 @@ export default function Proveedores() {
   const save = async () => {
     if (!form.nombre.trim()) return
     setSaving(true)
-    const payload = { negocio_id: negocioId, nombre: form.nombre.trim(), cuit: form.cuit, telefono: form.telefono, email: form.email, notas: form.notas }
+    const payload = { negocio_id: negocioId, nombre: upper(form.nombre), cuit: form.cuit, telefono: form.telefono, email: form.email, notas: form.notas }
     if (modal === 'add') {
       const { error } = await supabase.from('proveedores').insert(payload)
       if (error) { toast('Error al guardar', 'err'); setSaving(false); return }
@@ -236,7 +236,7 @@ export default function Proveedores() {
       {/* Modal proveedor */}
       {modal && (
         <Modal title={modal === 'add' ? 'Nuevo Proveedor' : 'Editar Proveedor'} onClose={() => setModal(null)}>
-          <FG label="Nombre" required><Inp value={form.nombre} onChange={e => fk('nombre', e.target.value)} /></FG>
+          <FG label="Nombre" required><Inp upper value={form.nombre} onChange={e => fk('nombre', e.target.value)} /></FG>
           <Grid2>
             <FG label="CUIT"><Inp value={form.cuit} onChange={e => fk('cuit', e.target.value)} /></FG>
             <FG label="Teléfono"><Inp value={form.telefono} onChange={e => fk('telefono', e.target.value)} /></FG>

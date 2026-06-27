@@ -129,6 +129,26 @@ SET default_tablespace = '';
 SET default_table_access_method = "heap";
 
 
+CREATE TABLE IF NOT EXISTS "public"."ajustes_stock" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "negocio_id" "uuid" NOT NULL,
+    "mp_id" "uuid" NOT NULL,
+    "mp_nombre" "text" NOT NULL,
+    "cantidad" numeric NOT NULL,
+    "stock_ant" numeric NOT NULL,
+    "stock_nuevo" numeric NOT NULL,
+    "motivo" "text" NOT NULL,
+    "creado_por" "uuid",
+    "creado_en" timestamp with time zone DEFAULT "now"() NOT NULL
+);
+
+
+ALTER TABLE "public"."ajustes_stock" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."ajustes_stock" IS 'Ajustes manuales de stock de materias primas (no incluye consumo por producción)';
+
+
 CREATE TABLE IF NOT EXISTS "public"."caja" (
     "id" "uuid" DEFAULT "extensions"."uuid_generate_v4"() NOT NULL,
     "negocio_id" "uuid" NOT NULL,
@@ -175,7 +195,8 @@ CREATE TABLE IF NOT EXISTS "public"."factura_items" (
     "cantidad" numeric NOT NULL,
     "unidad" "text" NOT NULL,
     "precio_unitario" numeric NOT NULL,
-    "subtotal" numeric NOT NULL
+    "subtotal" numeric NOT NULL,
+    "marca" "text"
 );
 
 
@@ -195,7 +216,9 @@ CREATE TABLE IF NOT EXISTS "public"."facturas" (
     "anulada" boolean DEFAULT false NOT NULL,
     "anulada_por" "uuid",
     "anulada_en" timestamp with time zone,
-    "motivo_anulacion" "text"
+    "motivo_anulacion" "text",
+    "iva_monto" numeric DEFAULT 0 NOT NULL,
+    "otros_cargos" numeric DEFAULT 0 NOT NULL
 );
 
 
@@ -210,11 +233,27 @@ CREATE TABLE IF NOT EXISTS "public"."historial_precios" (
     "motivo" "text" DEFAULT 'manual'::"text" NOT NULL,
     "referencia" "text",
     "creado_por" "uuid",
-    "creado_en" timestamp with time zone DEFAULT "now"() NOT NULL
+    "creado_en" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "proveedor_id" "uuid"
 );
 
 
 ALTER TABLE "public"."historial_precios" OWNER TO "postgres";
+
+
+CREATE TABLE IF NOT EXISTS "public"."invitaciones" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "email" "text" NOT NULL,
+    "nombre" "text",
+    "rol" "text" DEFAULT 'operario'::"text" NOT NULL,
+    "modulos" "text"[] DEFAULT '{}'::"text"[] NOT NULL,
+    "negocio_ids" "uuid"[] DEFAULT '{}'::"uuid"[] NOT NULL,
+    "creado_por" "uuid",
+    "creado_en" timestamp with time zone DEFAULT "now"() NOT NULL
+);
+
+
+ALTER TABLE "public"."invitaciones" OWNER TO "postgres";
 
 
 CREATE TABLE IF NOT EXISTS "public"."lotes" (
@@ -254,7 +293,9 @@ CREATE TABLE IF NOT EXISTS "public"."materias_primas" (
     "precio_actualizado_en" timestamp with time zone,
     "precio_actualizado_por" "uuid",
     "activo" boolean DEFAULT true NOT NULL,
-    "creado_en" timestamp with time zone DEFAULT "now"() NOT NULL
+    "creado_en" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "marca" "text",
+    "proveedor_habitual_id" "uuid"
 );
 
 
@@ -550,6 +591,8 @@ SELECT
     NULL::"date" AS "fecha",
     NULL::"date" AS "fecha_vencimiento",
     NULL::numeric AS "total",
+    NULL::numeric AS "iva_monto",
+    NULL::numeric AS "otros_cargos",
     NULL::boolean AS "anulada",
     NULL::numeric AS "total_pagado",
     NULL::numeric AS "saldo",
@@ -571,6 +614,21 @@ CREATE OR REPLACE VIEW "public"."v_deuda_proveedores" AS
 
 
 ALTER VIEW "public"."v_deuda_proveedores" OWNER TO "postgres";
+
+
+ALTER TABLE ONLY "public"."ajustes_stock"
+    ADD CONSTRAINT "ajustes_stock_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."invitaciones"
+    ADD CONSTRAINT "invitaciones_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."invitaciones"
+    ADD CONSTRAINT "invitaciones_email_key" UNIQUE ("email");
+
 
 
 ALTER TABLE ONLY "public"."caja"
@@ -693,6 +751,10 @@ ALTER TABLE ONLY "public"."usuarios"
 
 
 
+CREATE INDEX "idx_ajustes_stock_mp" ON "public"."ajustes_stock" USING "btree" ("mp_id", "creado_en" DESC);
+
+
+
 CREATE INDEX "idx_op_estado" ON "public"."ordenes_produccion" USING "btree" ("negocio_id", "estado");
 
 
@@ -750,6 +812,8 @@ CREATE OR REPLACE VIEW "public"."v_facturas_estado" AS
     "f"."fecha",
     "f"."fecha_vencimiento",
     "f"."total",
+    "f"."iva_monto",
+    "f"."otros_cargos",
     "f"."anulada",
     COALESCE("sum"("pg"."monto") FILTER (WHERE ("pg"."anulado" = false)), (0)::numeric) AS "total_pagado",
     ("f"."total" - COALESCE("sum"("pg"."monto") FILTER (WHERE ("pg"."anulado" = false)), (0)::numeric)) AS "saldo",
@@ -764,6 +828,36 @@ CREATE OR REPLACE VIEW "public"."v_facturas_estado" AS
      JOIN "public"."proveedores" "p" ON (("p"."id" = "f"."proveedor_id")))
      LEFT JOIN "public"."pagos" "pg" ON (("pg"."factura_id" = "f"."id")))
   GROUP BY "f"."id", "p"."nombre";
+
+
+
+ALTER TABLE ONLY "public"."ajustes_stock"
+    ADD CONSTRAINT "ajustes_stock_negocio_id_fkey" FOREIGN KEY ("negocio_id") REFERENCES "public"."negocios"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."ajustes_stock"
+    ADD CONSTRAINT "ajustes_stock_mp_id_fkey" FOREIGN KEY ("mp_id") REFERENCES "public"."materias_primas"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."ajustes_stock"
+    ADD CONSTRAINT "ajustes_stock_creado_por_fkey" FOREIGN KEY ("creado_por") REFERENCES "public"."usuarios"("id");
+
+
+
+ALTER TABLE ONLY "public"."invitaciones"
+    ADD CONSTRAINT "invitaciones_creado_por_fkey" FOREIGN KEY ("creado_por") REFERENCES "public"."usuarios"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."materias_primas"
+    ADD CONSTRAINT "materias_primas_proveedor_habitual_id_fkey" FOREIGN KEY ("proveedor_habitual_id") REFERENCES "public"."proveedores"("id");
+
+
+
+ALTER TABLE ONLY "public"."historial_precios"
+    ADD CONSTRAINT "historial_precios_proveedor_id_fkey" FOREIGN KEY ("proveedor_id") REFERENCES "public"."proveedores"("id");
 
 
 
@@ -1044,6 +1138,38 @@ ALTER TABLE ONLY "public"."salidas_produccion"
 
 ALTER TABLE ONLY "public"."usuarios"
     ADD CONSTRAINT "usuarios_id_fkey" FOREIGN KEY ("id") REFERENCES "auth"."users"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE "public"."ajustes_stock" ENABLE ROW LEVEL SECURITY;
+
+
+
+CREATE POLICY "Select ajustes_stock" ON "public"."ajustes_stock" FOR SELECT USING (("negocio_id" = ANY ("public"."mis_negocios"())));
+
+
+
+CREATE POLICY "Insert ajustes_stock" ON "public"."ajustes_stock" FOR INSERT WITH CHECK (("negocio_id" = ANY ("public"."mis_negocios"())));
+
+
+
+ALTER TABLE "public"."invitaciones" ENABLE ROW LEVEL SECURITY;
+
+
+
+CREATE POLICY "inv_admin" ON "public"."invitaciones" TO "authenticated" USING ((EXISTS ( SELECT 1
+   FROM "public"."usuarios"
+  WHERE (("usuarios"."id" = "auth"."uid"()) AND ("usuarios"."rol" = 'admin'::"text") AND ("usuarios"."activo" = true))))) WITH CHECK ((EXISTS ( SELECT 1
+   FROM "public"."usuarios"
+  WHERE (("usuarios"."id" = "auth"."uid"()) AND ("usuarios"."rol" = 'admin'::"text") AND ("usuarios"."activo" = true)))));
+
+
+
+CREATE POLICY "inv_self_select" ON "public"."invitaciones" FOR SELECT TO "authenticated" USING (("email" = "auth"."email"()));
+
+
+
+CREATE POLICY "inv_self_delete" ON "public"."invitaciones" FOR DELETE TO "authenticated" USING (("email" = "auth"."email"()));
 
 
 
@@ -1562,6 +1688,18 @@ GRANT ALL ON FUNCTION "public"."make_negocio_policies"("p_table" "text") TO "ser
 GRANT ALL ON FUNCTION "public"."mis_negocios"() TO "anon";
 GRANT ALL ON FUNCTION "public"."mis_negocios"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."mis_negocios"() TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."ajustes_stock" TO "anon";
+GRANT ALL ON TABLE "public"."ajustes_stock" TO "authenticated";
+GRANT ALL ON TABLE "public"."ajustes_stock" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."invitaciones" TO "anon";
+GRANT ALL ON TABLE "public"."invitaciones" TO "authenticated";
+GRANT ALL ON TABLE "public"."invitaciones" TO "service_role";
 
 
 

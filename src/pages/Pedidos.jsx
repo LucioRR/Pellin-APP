@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth }  from '../contexts/AuthContext'
 import { useToast } from '../contexts/ToastContext'
-import { supabase, fFecha, fNum } from '../lib/supabase'
+import { supabase, fFecha, fNum, upper } from '../lib/supabase'
 import { useSort } from '../lib/hooks'
 import {
   getPedidos, createPedido, updateEstadoPedido,
@@ -92,6 +92,7 @@ function ModalCrear({ productos, loading, onClose, onSubmit }) {
       <Grid2>
         <FG label="Cliente" required>
           <Inp
+            upper
             value={form.clienteNombre}
             onChange={e => setField('clienteNombre', e.target.value)}
             placeholder="Nombre del cliente"
@@ -426,7 +427,7 @@ export default function Pedidos() {
       await createPedido(
         negocioActivo.id,
         {
-          clienteNombre: form.clienteNombre,
+          clienteNombre: upper(form.clienteNombre),
           fechaEntrega:  form.fechaEntrega || null,
           notas:         form.notas || null,
           items: itemsValidos.map(i => ({ productoId: i.productoId, cantidad: Number(i.cantidad) })),
