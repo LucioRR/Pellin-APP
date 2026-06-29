@@ -192,7 +192,7 @@ export default function Compras() {
             <div style={{ fontSize: 11, fontWeight: 600, color: '#4A4437', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Ítems</div>
             {items.map((it, i) => (
               <div key={i} style={{ marginBottom: 10, paddingBottom: 10, borderBottom: i < items.length - 1 ? '1px dashed var(--border)' : 'none' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1.8fr 1.2fr 0.8fr 1fr auto', gap: 8, alignItems: 'flex-end' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr 0.7fr 0.9fr 0.9fr auto', gap: 8, alignItems: 'flex-end' }}>
                   <div>
                     {i === 0 && <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4 }}>Ingrediente</div>}
                     <SearchableSelect
@@ -213,6 +213,10 @@ export default function Compras() {
                   <div>
                     {i === 0 && <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4 }}>Precio unit. ($)</div>}
                     <Inp type="number" value={it.precioUnitario} onChange={e => updateItem(i, 'precioUnitario', e.target.value)} placeholder="0" />
+                  </div>
+                  <div>
+                    {i === 0 && <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4 }}>Precio total ($)</div>}
+                    <Inp readOnly value={ARS((+it.cantidad || 0) * (+it.precioUnitario || 0))} />
                   </div>
                   <button onClick={() => setItems(s => s.filter((_, j) => j !== i))}
                     disabled={items.length === 1}
