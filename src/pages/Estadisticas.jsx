@@ -9,9 +9,9 @@ const mesInicio = () => { const d = new Date(); d.setDate(1); return d.toISOStri
 const mesFin = () => { const d = new Date(); d.setMonth(d.getMonth() + 1, 0); return d.toISOString().split('T')[0] }
 
 export default function Estadisticas() {
-  const { negocioId } = useNegocio()
+  const { negocioId, puedeVerCostos } = useNegocio()
   const { toast } = useToast()
-  const [tab, setTab] = useState('caja')
+  const [tab, setTab] = useState(puedeVerCostos ? 'caja' : 'produccion')
   const [desde, setDesde] = useState(mesInicio())
   const [hasta, setHasta] = useState(mesFin())
   const [datos, setDatos] = useState(null)
@@ -189,13 +189,48 @@ export default function Estadisticas() {
 
   // ── Stock ─────────────────────────────────────────────────────────────────
   const cargarStock = async () => {
-    const [{ data: mps, error: me }, { data: pts, error: pe }] = await Promise.all([
+    const [{ data: mps, error: me }, { data: pts, error: pe }, { data: recetas, error: re }] = await Promise.all([
       supabase.from('materias_primas').select('id, nombre, unidad, stock_actual, stock_minimo, precio_costo').eq('negocio_id', negocioId).eq('activo', true).order('nombre'),
-      supabase.from('productos_terminados').select('id, nombre, unidad, stock_actual, stock_minimo, receta:receta_id(nombre)').eq('negocio_id', negocioId).eq('activo', true).order('nombre'),
+      supabase.from('productos_terminados').select('id, nombre, unidad, stock_actual, stock_minimo, receta_id, receta:receta_id(nombre)').eq('negocio_id', negocioId).eq('activo', true).order('nombre'),
+      supabase.from('recetas').select('id, rendimiento, ingredientes:receta_ingredientes(mp_id, cantidad)').eq('negocio_id', negocioId).eq('activo', true),
     ])
     if (me) throw me
     if (pe) throw pe
-    setDatos({ mps: mps || [], pts: pts || [] })
+    if (re) throw re
+
+    const mpsArr = mps || []
+    // Mapa de precio de costo por materia prima
+    const precioMap = {}
+    mpsArr.forEach(m => { precioMap[m.id] = Number(m.precio_costo) || 0 })
+
+    // Costo unitario de cada receta = Σ(cantidad × precio_costo MP) / rendimiento
+    const recetaCostoUnit = {}
+    ;(recetas || []).forEach(r => {
+      const costoLote = (r.ingredientes || []).reduce((s, ing) => s + (precioMap[ing.mp_id] || 0) * Number(ing.cantidad), 0)
+      recetaCostoUnit[r.id] = Number(r.rendimiento) > 0 ? costoLote / Number(r.rendimiento) : 0
+    })
+
+    // Materias primas con valor en stock = stock_actual × precio_costo
+    const mpsVal = mpsArr.map(m => ({
+      ...m,
+      valorStock: (Number(m.stock_actual) || 0) * (Number(m.precio_costo) || 0),
+    }))
+
+    // Productos terminados: costo unitario desde la receta (a precios actuales) × stock
+    const ptsVal = (pts || []).map(p => {
+      const costoUnit = p.receta_id ? (recetaCostoUnit[p.receta_id] || 0) : 0
+      return {
+        ...p,
+        costoUnit,
+        valorStock: (Number(p.stock_actual) || 0) * costoUnit,
+        sinCosteo: costoUnit === 0,
+      }
+    })
+
+    const valorMP = mpsVal.reduce((s, m) => s + m.valorStock, 0)
+    const valorPT = ptsVal.reduce((s, p) => s + p.valorStock, 0)
+
+    setDatos({ mps: mpsVal, pts: ptsVal, valorMP, valorPT, valorTotal: valorMP + valorPT })
   }
 
   // ── Exportar Excel ────────────────────────────────────────────────────────
@@ -223,14 +258,22 @@ export default function Estadisticas() {
       ), 'Por Ingrediente')
     } else if (tab === 'produccion') {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(
-        datos.porReceta.map(r => ({ 'Receta': r.nombre, 'Lotes': r.lotes, 'Total producido': `${r.producido} ${r.unidad}`, 'Costo total ($)': r.costo, 'Costo por unidad ($)': r.producido ? Math.round(r.costo / r.producido * 100) / 100 : 0 }))
+        datos.porReceta.map(r => ({ 'Receta': r.nombre, 'Lotes': r.lotes, 'Total producido': `${r.producido} ${r.unidad}`, ...(puedeVerCostos ? { 'Costo total ($)': r.costo, 'Costo por unidad ($)': r.producido ? Math.round(r.costo / r.producido * 100) / 100 : 0 } : {}) }))
       ), 'Por Receta')
     } else if (tab === 'stock') {
+      const r2 = (n) => Math.round(Number(n || 0) * 100) / 100
+      if (puedeVerCostos) {
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([
+          { 'Concepto': 'Valor en materias primas', 'Monto ($)': r2(datos.valorMP) },
+          { 'Concepto': 'Valor en productos terminados', 'Monto ($)': r2(datos.valorPT) },
+          { 'Concepto': 'Valor total en stock', 'Monto ($)': r2(datos.valorTotal) },
+        ]), 'Valorización')
+      }
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(
-        datos.mps.map(m => ({ 'Ingrediente': m.nombre, 'Unidad': m.unidad, 'Stock actual': m.stock_actual, 'Stock mínimo': m.stock_minimo, 'Precio costo ($)': m.precio_costo, 'Estado': m.stock_actual <= m.stock_minimo ? 'Bajo mínimo' : 'OK' }))
+        datos.mps.map(m => ({ 'Ingrediente': m.nombre, 'Unidad': m.unidad, 'Stock actual': m.stock_actual, 'Stock mínimo': m.stock_minimo, ...(puedeVerCostos ? { 'Precio costo ($)': m.precio_costo, 'Valor en stock ($)': r2(m.valorStock) } : {}), 'Estado': m.stock_actual <= m.stock_minimo ? 'Bajo mínimo' : 'OK' }))
       ), 'Materias Primas')
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(
-        datos.pts.map(p => ({ 'Producto': p.nombre, 'Unidad': p.unidad, 'Stock actual': p.stock_actual, 'Stock mínimo': p.stock_minimo, 'Receta': p.receta?.nombre || '—', 'Estado': p.stock_actual <= p.stock_minimo ? 'Bajo mínimo' : 'OK' }))
+        datos.pts.map(p => ({ 'Producto': p.nombre, 'Unidad': p.unidad, 'Stock actual': p.stock_actual, 'Stock mínimo': p.stock_minimo, 'Receta': p.receta?.nombre || '—', ...(puedeVerCostos ? { 'Costo unit ($)': p.sinCosteo ? '' : r2(p.costoUnit), 'Valor en stock ($)': p.sinCosteo ? '' : r2(p.valorStock) } : {}), 'Estado': p.stock_actual <= p.stock_minimo ? 'Bajo mínimo' : 'OK' }))
       ), 'Productos Terminados')
     }
 
@@ -335,10 +378,10 @@ export default function Estadisticas() {
 
     if (tab === 'produccion') return (
       <div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14, marginBottom: 20 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${puedeVerCostos ? 4 : 3},1fr)`, gap: 14, marginBottom: 20 }}>
           <Stat label="Lotes producidos" val={datos.totalLotes} color="#2D6A4F" icon="flask" />
           <Stat label="Total producido" val={`${datos.totalProducido} u.`} color="#2D6A4F" icon="box" />
-          <Stat label="Costo total producción" val={ARS(datos.costoTotal)} color="#B8722A" icon="pay" />
+          {puedeVerCostos && <Stat label="Costo total producción" val={ARS(datos.costoTotal)} color="#B8722A" icon="pay" />}
           <Stat label="Total despachado" val={`${datos.totalDespachado} u.`} color="#1A56DB" icon="cart" />
         </div>
         <Card>
@@ -346,16 +389,16 @@ export default function Estadisticas() {
             <h3 style={{ fontFamily: 'var(--font-head)', fontSize: 14, fontWeight: 600, margin: 0 }}>Por receta</h3>
           </div>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr><TH>Receta</TH><TH>Lotes</TH><TH>Total producido</TH><TH>Costo total</TH><TH>Costo por unidad</TH></tr></thead>
+            <thead><tr><TH>Receta</TH><TH>Lotes</TH><TH>Total producido</TH>{puedeVerCostos && <TH>Costo total</TH>}{puedeVerCostos && <TH>Costo por unidad</TH>}</tr></thead>
             <tbody>
-              {datos.porReceta.length === 0 && <EmptyRow cols={5} msg="Sin producción en el período seleccionado" />}
+              {datos.porReceta.length === 0 && <EmptyRow cols={puedeVerCostos ? 5 : 3} msg="Sin producción en el período seleccionado" />}
               {datos.porReceta.map((r, i) => (
                 <tr key={i}>
                   <TD bold>{r.nombre}</TD>
                   <TD>{r.lotes}x</TD>
                   <TD bold color="#2D6A4F">{r.producido} {r.unidad}</TD>
-                  <TD>{ARS(r.costo)}</TD>
-                  <TD color="#B8722A">{r.producido ? ARS(Math.round(r.costo / r.producido * 100) / 100) : '—'} / {r.unidad}</TD>
+                  {puedeVerCostos && <TD>{ARS(r.costo)}</TD>}
+                  {puedeVerCostos && <TD color="#B8722A">{r.producido ? ARS(Math.round(r.costo / r.producido * 100) / 100) : '—'} / {r.unidad}</TD>}
                 </tr>
               ))}
             </tbody>
@@ -366,14 +409,21 @@ export default function Estadisticas() {
 
     if (tab === 'stock') return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        {puedeVerCostos && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 14 }}>
+            <Stat label="Valor en materias primas" val={ARS(datos.valorMP)} color="#B8722A" icon="box" />
+            <Stat label="Valor en productos terminados" val={ARS(datos.valorPT)} color="#2D6A4F" icon="box" />
+            <Stat label="Valor total en stock" val={ARS(datos.valorTotal)} color="#1A56DB" icon="wallet" />
+          </div>
+        )}
         <Card>
           <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)' }}>
             <h3 style={{ fontFamily: 'var(--font-head)', fontSize: 14, fontWeight: 600, margin: 0 }}>Materias Primas</h3>
           </div>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr><TH>Ingrediente</TH><TH>Stock actual</TH><TH>Stock mínimo</TH><TH>Precio costo</TH><TH>Estado</TH></tr></thead>
+            <thead><tr><TH>Ingrediente</TH><TH>Stock actual</TH><TH>Stock mínimo</TH>{puedeVerCostos && <TH>Precio costo</TH>}{puedeVerCostos && <TH>Valor en stock</TH>}<TH>Estado</TH></tr></thead>
             <tbody>
-              {datos.mps.length === 0 && <EmptyRow cols={5} msg="Sin materias primas cargadas" />}
+              {datos.mps.length === 0 && <EmptyRow cols={puedeVerCostos ? 6 : 4} msg="Sin materias primas cargadas" />}
               {datos.mps.map(m => {
                 const bajo = Number(m.stock_actual) <= Number(m.stock_minimo)
                 return (
@@ -381,12 +431,19 @@ export default function Estadisticas() {
                     <TD bold>{m.nombre}</TD>
                     <TD bold color={bajo ? '#BF3030' : '#2D6A4F'}>{m.stock_actual} {m.unidad}</TD>
                     <TD sm color="#6C6659">{m.stock_minimo} {m.unidad}</TD>
-                    <TD>{ARS(m.precio_costo)}</TD>
+                    {puedeVerCostos && <TD>{ARS(m.precio_costo)}</TD>}
+                    {puedeVerCostos && <TD bold>{ARS(m.valorStock)}</TD>}
                     <TD><Badge type={bajo ? 'err' : 'ok'}>{bajo ? 'Bajo mínimo' : 'OK'}</Badge></TD>
                   </tr>
                 )
               })}
             </tbody>
+            {puedeVerCostos && datos.mps.length > 0 && (
+              <tfoot><tr>
+                <TD bold>Total</TD><TD></TD><TD></TD><TD></TD>
+                <TD bold color="#B8722A">{ARS(datos.valorMP)}</TD><TD></TD>
+              </tr></tfoot>
+            )}
           </table>
         </Card>
         <Card>
@@ -394,9 +451,9 @@ export default function Estadisticas() {
             <h3 style={{ fontFamily: 'var(--font-head)', fontSize: 14, fontWeight: 600, margin: 0 }}>Productos Terminados</h3>
           </div>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr><TH>Producto</TH><TH>En depósito</TH><TH>Stock mínimo</TH><TH>Receta</TH><TH>Estado</TH></tr></thead>
+            <thead><tr><TH>Producto</TH><TH>En depósito</TH><TH>Stock mínimo</TH><TH>Receta</TH>{puedeVerCostos && <TH>Costo unit.</TH>}{puedeVerCostos && <TH>Valor en stock</TH>}<TH>Estado</TH></tr></thead>
             <tbody>
-              {datos.pts.length === 0 && <EmptyRow cols={5} msg="Sin productos terminados cargados" />}
+              {datos.pts.length === 0 && <EmptyRow cols={puedeVerCostos ? 7 : 5} msg="Sin productos terminados cargados" />}
               {datos.pts.map(p => {
                 const bajo = Number(p.stock_actual) <= Number(p.stock_minimo)
                 return (
@@ -405,13 +462,24 @@ export default function Estadisticas() {
                     <TD bold color={bajo ? '#BF3030' : '#2D6A4F'}>{p.stock_actual} {p.unidad}</TD>
                     <TD sm color="#6C6659">{p.stock_minimo} {p.unidad}</TD>
                     <TD sm color="#6C6659">{p.receta?.nombre || '—'}</TD>
+                    {puedeVerCostos && <TD sm color={p.sinCosteo ? '#9A9080' : '#6C6659'}>{p.sinCosteo ? '—' : ARS(p.costoUnit)}</TD>}
+                    {puedeVerCostos && <TD bold color={p.sinCosteo ? '#9A9080' : 'inherit'}>{p.sinCosteo ? '—' : ARS(p.valorStock)}</TD>}
                     <TD><Badge type={bajo ? 'err' : 'ok'}>{bajo ? 'Bajo mínimo' : 'OK'}</Badge></TD>
                   </tr>
                 )
               })}
             </tbody>
+            {puedeVerCostos && datos.pts.length > 0 && (
+              <tfoot><tr>
+                <TD bold>Total</TD><TD></TD><TD></TD><TD></TD><TD></TD>
+                <TD bold color="#2D6A4F">{ARS(datos.valorPT)}</TD><TD></TD>
+              </tr></tfoot>
+            )}
           </table>
         </Card>
+        {puedeVerCostos && datos.pts.some(p => p.sinCosteo) && (
+          <InfoBox type="info">Los productos terminados sin receta costeable (—) no se incluyen en la valorización. El costo unitario se calcula desde la receta a precios de costo actuales de las materias primas.</InfoBox>
+        )}
       </div>
     )
 
@@ -440,7 +508,9 @@ export default function Estadisticas() {
       </div>
 
       <Tabs
-        tabs={[['caja','Caja'],['proveedores','Proveedores'],['compras','Compras'],['produccion','Producción'],['stock','Stock actual']]}
+        tabs={puedeVerCostos
+          ? [['caja','Caja'],['proveedores','Proveedores'],['compras','Compras'],['produccion','Producción'],['stock','Stock actual']]
+          : [['produccion','Producción'],['stock','Stock actual']]}
         active={tab}
         onChange={(t) => { setTab(t); setDatos(null) }}
       />

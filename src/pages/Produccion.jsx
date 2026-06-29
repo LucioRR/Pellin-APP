@@ -10,7 +10,7 @@ import PrintLabel from '../components/PrintLabel'
 
 export default function Produccion() {
   const { negocioId } = useNegocio()
-  const { usuario, esAdmin } = useAuth()
+  const { usuario, esAdmin, puedeVerCostos } = useAuth()
   const { toast } = useToast()
   const [tab, setTab] = useState('lotes')
   const [lotes, setLotes] = useState([])
@@ -270,7 +270,7 @@ export default function Produccion() {
                 <TH onSort={() => toggleSortLotes('receta')} sortDir={sortLotes.col === 'receta' ? sortLotes.dir : null}>Receta</TH>
                 <TH>Lotes</TH>
                 <TH onSort={() => toggleSortLotes('prod')} sortDir={sortLotes.col === 'prod' ? sortLotes.dir : null}>Producido</TH>
-                <TH onSort={() => toggleSortLotes('costo')} sortDir={sortLotes.col === 'costo' ? sortLotes.dir : null}>Costo total</TH>
+                {puedeVerCostos && <TH onSort={() => toggleSortLotes('costo')} sortDir={sortLotes.col === 'costo' ? sortLotes.dir : null}>Costo total</TH>}
                 <TH onSort={() => toggleSortLotes('vence')} sortDir={sortLotes.col === 'vence' ? sortLotes.dir : null}>Vence</TH>
                 <TH>Usuario</TH>
                 <TH onSort={() => toggleSortLotes('stock')} sortDir={sortLotes.col === 'stock' ? sortLotes.dir : null}>Stock disp.</TH>
@@ -278,7 +278,7 @@ export default function Produccion() {
               </tr>
             </thead>
             <tbody>
-              {lotesFiltrados.length === 0 && <EmptyRow cols={9} msg="Sin lotes para el filtro seleccionado" />}
+              {lotesFiltrados.length === 0 && <EmptyRow cols={puedeVerCostos ? 9 : 8} msg="Sin lotes para el filtro seleccionado" />}
               {lotesFiltrados.map(l => {
                 const dias = diasRestantes(l.fecha_vencimiento)
                 const stock = stockRestante(l)
@@ -292,7 +292,7 @@ export default function Produccion() {
                     <TD bold>{l.receta_nombre}</TD>
                     <TD>{l.cant_batches}x</TD>
                     <TD bold color={l.anulado ? 'var(--muted)' : '#2D6A4F'}>{l.total_producido} {l.unidad}</TD>
-                    <TD>{ARS(l.costo_total)}</TD>
+                    {puedeVerCostos && <TD>{ARS(l.costo_total)}</TD>}
                     <TD>
                       {!l.fecha_vencimiento
                         ? <span style={{ color: 'var(--muted)' }}>—</span>
@@ -355,7 +355,10 @@ export default function Produccion() {
                     <div>
                       <h3 style={{ fontFamily: 'var(--font-head)', fontSize: 15, fontWeight: 700, margin: 0 }}>{r.nombre}</h3>
                       <p style={{ color: '#2D6A4F', fontSize: 13, margin: '4px 0 0', fontWeight: 600 }}>Rinde {r.rendimiento} {r.unidad_rendimiento} / lote</p>
-                      <p style={{ color: '#B8722A', fontSize: 13, margin: '2px 0 0', fontWeight: 600 }}>Costo: {ARS(r2(costoRec))} / lote</p>
+                      {puedeVerCostos && <>
+                        <p style={{ color: '#B8722A', fontSize: 13, margin: '2px 0 0', fontWeight: 600 }}>Costo: {ARS(r2(costoRec))} / lote</p>
+                        <p style={{ color: '#1A56DB', fontSize: 13, margin: '2px 0 0', fontWeight: 700 }}>Costo por {r.unidad_rendimiento}: {r.rendimiento > 0 ? ARS(r2(costoRec / r.rendimiento)) : '—'}</p>
+                      </>}
                     </div>
                     <BtnSm onClick={() => openEditRec(r)}><Ic n="edit" s={12} /></BtnSm>
                   </div>
@@ -367,7 +370,7 @@ export default function Produccion() {
                         <span style={{ fontSize: 13 }}>{ing.mp_nombre}</span>
                         <div style={{ textAlign: 'right' }}>
                           <span style={{ fontSize: 13, fontWeight: 600 }}>{ing.cantidad} {ing.unidad}</span>
-                          <div style={{ fontSize: 10, color: 'var(--muted)' }}>{ARS((mp?.precio_costo || 0) * ing.cantidad)}</div>
+                          {puedeVerCostos && <div style={{ fontSize: 10, color: 'var(--muted)' }}>{ARS((mp?.precio_costo || 0) * ing.cantidad)}</div>}
                         </div>
                       </div>
                     )
@@ -437,10 +440,16 @@ export default function Produccion() {
                 <span style={{ fontSize: 13, color: 'var(--muted)' }}>Total a producir:</span>
                 <span style={{ fontFamily: 'var(--font-head)', fontSize: 16, fontWeight: 700, color: '#2D6A4F' }}>{totalProd} {recSel.unidad_rendimiento}</span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
-                <span style={{ fontSize: 13, color: 'var(--muted)' }}>Costo estimado:</span>
-                <span style={{ fontWeight: 700, color: '#B8722A' }}>{ARS(costoLote)}</span>
-              </div>
+              {puedeVerCostos && <>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
+                  <span style={{ fontSize: 13, color: 'var(--muted)' }}>Costo estimado:</span>
+                  <span style={{ fontWeight: 700, color: '#B8722A' }}>{ARS(costoLote)}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
+                  <span style={{ fontSize: 13, color: 'var(--muted)' }}>Costo por {recSel.unidad_rendimiento}:</span>
+                  <span style={{ fontWeight: 700, color: '#1A56DB' }}>{totalProd > 0 ? ARS(r2(costoLote / totalProd)) : '—'}</span>
+                </div>
+              </>}
             </div>
           )}
 

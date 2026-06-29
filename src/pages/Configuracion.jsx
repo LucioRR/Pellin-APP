@@ -555,6 +555,15 @@ export default function Configuracion() {
               </div>
             </FG>
           )}
+          {usuForm.rol === 'operario' && (
+            <FG label="Permisos especiales">
+              <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 14 }}>
+                <input type="checkbox" checked={usuForm.modulos.includes('ver_costos')} onChange={() => toggleMod('ver_costos')} style={{ width: 16, height: 16, accentColor: '#2D6A4F' }} />
+                Mostrar costos
+              </label>
+              <p style={{ fontSize: 11, color: 'var(--muted)', margin: '6px 0 0' }}>Precios de costo, costos de recetas y productos, y valorización de stock. Si está destildado, el usuario no verá ningún costo aunque tenga los módulos habilitados.</p>
+            </FG>
+          )}
           <MRow><Btn v="ghost" onClick={() => setUsuModal(null)}>Cancelar</Btn><Btn onClick={saveUsu} loading={saving}>Guardar</Btn></MRow>
         </Modal>
       )}
@@ -657,6 +666,15 @@ export default function Configuracion() {
                   )
                 })}
               </div>
+            </FG>
+          )}
+          {invForm.rol === 'operario' && (
+            <FG label="Permisos especiales">
+              <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 14 }}>
+                <input type="checkbox" checked={invForm.modulos.includes('ver_costos')} onChange={() => toggleInvMod('ver_costos')} style={{ width: 16, height: 16, accentColor: '#2D6A4F' }} />
+                Mostrar costos
+              </label>
+              <p style={{ fontSize: 11, color: 'var(--muted)', margin: '6px 0 0' }}>Precios de costo, costos de recetas y productos, y valorización de stock. Si está destildado, el usuario no verá ningún costo aunque tenga los módulos habilitados.</p>
             </FG>
           )}
           <MRow><Btn v="ghost" onClick={() => setInvModal(false)}>Cancelar</Btn><Btn onClick={saveInv} loading={saving}>Crear invitación</Btn></MRow>

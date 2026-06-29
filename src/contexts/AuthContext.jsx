@@ -124,6 +124,9 @@ export function AuthProvider({ children }) {
 
   const esAdmin = usuario?.rol === 'admin'
 
+  // Permiso transversal para ver costos/precios. Los admins siempre pueden.
+  const puedeVerCostos = !!usuario && (usuario.rol === 'admin' || usuario.modulos?.includes('ver_costos'))
+
   const cargando = session === undefined
 
   return (
@@ -137,6 +140,7 @@ export function AuthProvider({ children }) {
       logout,
       tieneAcceso,
       esAdmin,
+      puedeVerCostos,
       cargando,
       accesoNegado,
       recargarUsuario: () => session?.user && cargarUsuario(session.user.id),

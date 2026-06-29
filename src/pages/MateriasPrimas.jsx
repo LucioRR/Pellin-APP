@@ -8,7 +8,7 @@ import * as XLSX from 'xlsx'
 
 export default function MateriasPrimas() {
   const { negocioId } = useNegocio()
-  const { usuario } = useAuth()
+  const { usuario, puedeVerCostos } = useAuth()
   const { toast } = useToast()
   const [items, setItems] = useState([])
   const [proveedores, setProveedores] = useState([])
@@ -134,7 +134,7 @@ export default function MateriasPrimas() {
       'Unidad': m.unidad,
       'Stock Actual': m.stock_actual,
       'Stock Mínimo': m.stock_minimo,
-      'Precio de Costo ($)': m.precio_costo,
+      ...(puedeVerCostos ? { 'Precio de Costo ($)': m.precio_costo } : {}),
       'Estado': m.stock_actual <= m.stock_minimo ? 'Bajo mínimo' : 'OK',
     }))
     const ws = XLSX.utils.json_to_sheet(rows)
@@ -162,10 +162,10 @@ export default function MateriasPrimas() {
       <Card>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr>
-            <TH>Ingrediente</TH><TH>Marca</TH><TH>Proveedor habitual</TH><TH>Unidad</TH><TH>Stock Actual</TH><TH>Stock Mínimo</TH><TH>Precio Costo</TH><TH>Estado</TH><TH></TH>
+            <TH>Ingrediente</TH><TH>Marca</TH><TH>Proveedor habitual</TH><TH>Unidad</TH><TH>Stock Actual</TH><TH>Stock Mínimo</TH>{puedeVerCostos && <TH>Precio Costo</TH>}<TH>Estado</TH><TH></TH>
           </tr></thead>
           <tbody>
-            {items.length === 0 && <EmptyRow cols={9} msg="No hay ingredientes cargados aún" />}
+            {items.length === 0 && <EmptyRow cols={puedeVerCostos ? 9 : 8} msg="No hay ingredientes cargados aún" />}
             {items.map(m => {
               const bajo = Number(m.stock_actual) <= Number(m.stock_minimo)
               return (
@@ -176,12 +176,12 @@ export default function MateriasPrimas() {
                   <TD sm color="var(--muted)">{m.unidad}</TD>
                   <TD bold color={bajo ? '#BF3030' : '#2D6A4F'}>{fNum(m.stock_actual)} {m.unidad}</TD>
                   <TD sm color="var(--muted)">{m.stock_minimo} {m.unidad}</TD>
-                  <TD bold>{ARS(m.precio_costo)}</TD>
+                  {puedeVerCostos && <TD bold>{ARS(m.precio_costo)}</TD>}
                   <TD><Badge type={bajo ? 'err' : 'ok'}>{bajo ? 'Bajo mínimo' : 'OK'}</Badge></TD>
                   <td style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
                     <div style={{ display: 'flex', gap: 6 }}>
                       <BtnSm onClick={() => openAdj(m)}>± Ajustar</BtnSm>
-                      <BtnSm onClick={() => verHistorial(m)} title="Historial de precios"><Ic n="history" s={12} /></BtnSm>
+                      {puedeVerCostos && <BtnSm onClick={() => verHistorial(m)} title="Historial de precios"><Ic n="history" s={12} /></BtnSm>}
                       <BtnSm onClick={() => openEdit(m)}><Ic n="edit" s={12} /></BtnSm>
                       <BtnSm v="danger" onClick={() => desactivar(m)}><Ic n="trash" s={12} c="#BF3030" /></BtnSm>
                     </div>
@@ -208,7 +208,7 @@ export default function MateriasPrimas() {
           </Grid2>
           <Grid2>
             <FG label="Unidad"><Inp value={form.unidad} onChange={e => fk('unidad', e.target.value)} placeholder="kg, L, un, cc..." /></FG>
-            <FG label="Precio de costo ($)"><Inp type="number" value={form.precio_costo} onChange={e => fk('precio_costo', e.target.value)} /></FG>
+            {puedeVerCostos && <FG label="Precio de costo ($)"><Inp type="number" value={form.precio_costo} onChange={e => fk('precio_costo', e.target.value)} /></FG>}
           </Grid2>
           {modal === 'add' ? (
             <Grid2>
@@ -221,7 +221,7 @@ export default function MateriasPrimas() {
           {modal !== 'add' && (
             <InfoBox type="info">El stock actual ({fNum(modal.stock_actual)} {modal.unidad}) se modifica solo desde "± Ajustar", que exige un motivo.</InfoBox>
           )}
-          {modal !== 'add' && Number(form.precio_costo) !== modal.precio_costo && (
+          {puedeVerCostos && modal !== 'add' && Number(form.precio_costo) !== modal.precio_costo && (
             <InfoBox type="info">El cambio de precio quedará registrado en el historial.</InfoBox>
           )}
           <MRow>

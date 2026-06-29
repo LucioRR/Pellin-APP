@@ -8,7 +8,7 @@ import { PageHeader, Card, Btn, BtnSm, Badge, Modal, AnularModal, FG, Grid2, Inp
 
 export default function Productos() {
   const { negocioId } = useNegocio()
-  const { usuario, esAdmin } = useAuth()
+  const { usuario, esAdmin, puedeVerCostos } = useAuth()
   const { toast } = useToast()
   const [tab, setTab] = useState('stock')
   const [productos, setProductos] = useState([])
@@ -31,12 +31,21 @@ export default function Productos() {
 
   const cargar = async () => {
     setCargando(true)
-    const [{ data: ps }, { data: ss }, { data: rs }] = await Promise.all([
+    const [{ data: ps }, { data: ss }, { data: rs }, { data: ms }] = await Promise.all([
       supabase.from('productos_terminados').select('*, receta:receta_id(nombre)').eq('negocio_id', negocioId).eq('activo', true).order('nombre'),
       supabase.from('salidas_produccion').select('*').eq('negocio_id', negocioId).order('fecha', { ascending: false }),
-      supabase.from('recetas').select('id,nombre').eq('negocio_id', negocioId).eq('activo', true).order('nombre'),
+      supabase.from('recetas').select('id, nombre, rendimiento, unidad_rendimiento, ingredientes:receta_ingredientes(mp_id, cantidad)').eq('negocio_id', negocioId).eq('activo', true).order('nombre'),
+      supabase.from('materias_primas').select('id, precio_costo').eq('negocio_id', negocioId).eq('activo', true),
     ])
-    setProductos(ps || [])
+    // Costo por unidad de cada receta = Σ(cantidad × precio_costo MP) / rendimiento
+    const precioMap = {}
+    ;(ms || []).forEach(m => { precioMap[m.id] = Number(m.precio_costo) || 0 })
+    const costoUnitReceta = {}
+    ;(rs || []).forEach(r => {
+      const costoLote = (r.ingredientes || []).reduce((s, ing) => s + (precioMap[ing.mp_id] || 0) * Number(ing.cantidad), 0)
+      costoUnitReceta[r.id] = Number(r.rendimiento) > 0 ? costoLote / Number(r.rendimiento) : 0
+    })
+    setProductos((ps || []).map(p => ({ ...p, costoUnit: p.receta_id ? (costoUnitReceta[p.receta_id] || 0) : 0 })))
     setSalidas(ss || [])
     setRecetas(rs || [])
     setCargando(false)
@@ -125,18 +134,20 @@ export default function Productos() {
                 <TH onSort={() => toggleSortProd('stock_minimo')} sortDir={sortProd.col === 'stock_minimo' ? sortProd.dir : null}>Stock mínimo</TH>
                 <TH onSort={() => toggleSortProd('vida_util')} sortDir={sortProd.col === 'vida_util' ? sortProd.dir : null}>Vida útil</TH>
                 <TH onSort={() => toggleSortProd('receta')} sortDir={sortProd.col === 'receta' ? sortProd.dir : null}>Receta vinculada</TH>
+                {puedeVerCostos && <TH onSort={() => toggleSortProd('costo')} sortDir={sortProd.col === 'costo' ? sortProd.dir : null}>Costo / unidad</TH>}
                 <TH>Estado</TH>
                 <TH></TH>
               </tr>
             </thead>
             <tbody>
-              {productos.length === 0 && <EmptyRow cols={8} msg="Sin productos terminados. Creá uno para poder vincular lotes." />}
+              {productos.length === 0 && <EmptyRow cols={puedeVerCostos ? 9 : 8} msg="Sin productos terminados. Creá uno para poder vincular lotes." />}
               {applySortProd(productos, {
                 nombre:      p => p.nombre?.toLowerCase(),
                 stock:       p => Number(p.stock_actual),
                 stock_minimo:p => Number(p.stock_minimo),
                 vida_util:   p => Number(p.vida_util_dias || 0),
                 receta:      p => p.receta?.nombre?.toLowerCase() || '',
+                costo:       p => Number(p.costoUnit || 0),
               }).map(p => {
                 const bajo = Number(p.stock_actual) <= Number(p.stock_minimo)
                 return (
@@ -147,6 +158,7 @@ export default function Productos() {
                     <TD sm color="var(--muted)">{p.stock_minimo} {p.unidad}</TD>
                     <TD sm color="var(--muted)">{p.vida_util_dias ? `${p.vida_util_dias}d` : '—'}</TD>
                     <TD sm color="var(--muted)">{p.receta?.nombre || '—'}</TD>
+                    {puedeVerCostos && <TD bold color={p.costoUnit > 0 ? '#B8722A' : 'var(--muted)'}>{p.costoUnit > 0 ? `${ARS(r2(p.costoUnit))} / ${p.unidad}` : '—'}</TD>}
                     <TD><Badge type={bajo ? 'err' : 'ok'}>{bajo ? 'Bajo mínimo' : 'OK'}</Badge></TD>
                     <td style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
                       <div style={{ display: 'flex', gap: 6 }}>
@@ -258,8 +270,8 @@ export default function Productos() {
                   <tr>
                     <TH onSort={() => toggleSortLotes('fecha')} sortDir={sortLotes.col === 'fecha' ? sortLotes.dir : null}>Fecha producción</TH>
                     <TH onSort={() => toggleSortLotes('cant')} sortDir={sortLotes.col === 'cant' ? sortLotes.dir : null}>Cantidad producida</TH>
-                    <TH onSort={() => toggleSortLotes('costo')} sortDir={sortLotes.col === 'costo' ? sortLotes.dir : null}>Costo lote</TH>
-                    <TH>Costo unitario</TH>
+                    {puedeVerCostos && <TH onSort={() => toggleSortLotes('costo')} sortDir={sortLotes.col === 'costo' ? sortLotes.dir : null}>Costo lote</TH>}
+                    {puedeVerCostos && <TH>Costo unitario</TH>}
                     <TH onSort={() => toggleSortLotes('vence')} sortDir={sortLotes.col === 'vence' ? sortLotes.dir : null}>Fecha vencimiento</TH>
                     <TH>Días restantes</TH>
                     <TH>Notas</TH>
@@ -267,7 +279,7 @@ export default function Productos() {
                 </thead>
                 <tbody>
                   {lotesProducto.length === 0
-                    ? <EmptyRow cols={7} msg="Sin lotes registrados para este producto" />
+                    ? <EmptyRow cols={puedeVerCostos ? 7 : 5} msg="Sin lotes registrados para este producto" />
                     : applySortLotes(lotesProducto, {
                         fecha: l => l.fecha,
                         cant:  l => Number(l.total_producido),
@@ -283,8 +295,8 @@ export default function Productos() {
                           <tr key={l.id} style={{ background: rowBg }}>
                             <TD>{fFecha(l.fecha)}</TD>
                             <TD>{fNum(l.total_producido)}</TD>
-                            <TD>{l.costo_total ? ARS(l.costo_total) : '—'}</TD>
-                            <TD sm color="var(--muted)">{l.costo_total && l.total_producido ? ARS(r2(l.costo_total / l.total_producido)) : '—'}</TD>
+                            {puedeVerCostos && <TD>{l.costo_total ? ARS(l.costo_total) : '—'}</TD>}
+                            {puedeVerCostos && <TD sm color="var(--muted)">{l.costo_total && l.total_producido ? ARS(r2(l.costo_total / l.total_producido)) : '—'}</TD>}
                             <TD>{l.fecha_vencimiento ? fFecha(l.fecha_vencimiento) : '—'}</TD>
                             <TD>
                               {dias === null

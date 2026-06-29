@@ -4,7 +4,7 @@ import { useNegocio } from '../lib/negocio'
 import { Card, Stat, Badge, Spinner, Ic, PageHeader } from '../components/UI'
 
 export default function Dashboard() {
-  const { negocioId } = useNegocio()
+  const { negocioId, puedeVerCostos } = useNegocio()
   const [d, setD] = useState(null)
   const [cargando, setCargando] = useState(true)
 
@@ -53,14 +53,15 @@ export default function Dashboard() {
     <div>
       <PageHeader title="Panel General" sub={fechaHoy.charAt(0).toUpperCase() + fechaHoy.slice(1)} />
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14, marginBottom: 20 }}>
-        <Stat label="Deuda con proveedores" val={ARS(deudaTotal)} color="#B8722A" icon="users" />
-        <Stat label="Deuda vencida" val={ARS(deudaVencida)} color={deudaVencida > 0 ? '#BF3030' : '#6C6659'} icon="warn" />
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${puedeVerCostos ? 4 : 1},1fr)`, gap: 14, marginBottom: 20 }}>
+        {puedeVerCostos && <Stat label="Deuda con proveedores" val={ARS(deudaTotal)} color="#B8722A" icon="users" />}
+        {puedeVerCostos && <Stat label="Deuda vencida" val={ARS(deudaVencida)} color={deudaVencida > 0 ? '#BF3030' : '#6C6659'} icon="warn" />}
         <Stat label="Stock bajo mínimo" val={`${stockBajoTotal} items`} color={stockBajoTotal > 0 ? '#E67E22' : '#6C6659'} icon="box" />
-        <Stat label="Balance del mes" val={ARS(balance)} color={balance >= 0 ? '#2D6A4F' : '#BF3030'} icon="wallet" sub={`↑ ${ARS(ingMes)}  ↓ ${ARS(egrMes)}`} />
+        {puedeVerCostos && <Stat label="Balance del mes" val={ARS(balance)} color={balance >= 0 ? '#2D6A4F' : '#BF3030'} icon="wallet" sub={`↑ ${ARS(ingMes)}  ↓ ${ARS(egrMes)}`} />}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: puedeVerCostos ? '1fr 1fr' : '1fr', gap: 16, marginBottom: 16 }}>
+        {puedeVerCostos && (
         <Card>
           <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8 }}>
             <Ic n="warn" s={14} c="#9A6200" />
@@ -82,6 +83,7 @@ export default function Dashboard() {
             ))
           }
         </Card>
+        )}
 
         <Card>
           <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)' }}>
@@ -110,7 +112,7 @@ export default function Dashboard() {
           ? <p style={{ padding: '14px 18px', color: 'var(--muted)', fontSize: 13 }}>Sin lotes registrados aún</p>
           : <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead><tr>
-              {['Fecha', 'Receta', 'Lotes', 'Total producido', 'Costo'].map(h =>
+              {['Fecha', 'Receta', 'Lotes', 'Total producido', ...(puedeVerCostos ? ['Costo'] : [])].map(h =>
                 <th key={h} style={{ textAlign: 'left', padding: '8px 14px', fontSize: 10, textTransform: 'uppercase', color: 'var(--muted)', borderBottom: '2px solid var(--border)', background: '#F3EEE5', letterSpacing: '0.08em' }}>{h}</th>
               )}
             </tr></thead>
@@ -120,7 +122,7 @@ export default function Dashboard() {
                 <td style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)', fontWeight: 600 }}>{l.receta_nombre}</td>
                 <td style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>{l.cant_batches}x</td>
                 <td style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)', fontWeight: 700, color: '#2D6A4F' }}>{l.total_producido} {l.unidad}</td>
-                <td style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>{ARS(l.costo_total)}</td>
+                {puedeVerCostos && <td style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>{ARS(l.costo_total)}</td>}
               </tr>
             ))}</tbody>
           </table>

@@ -3,13 +3,14 @@ import { supabase, hoy, r2, upper } from './supabase'
 
 // Hook compartido para obtener negocioId y userId
 export function useNegocio() {
-  const { negocioActivo, usuario, esAdmin } = useAuth()
+  const { negocioActivo, usuario, esAdmin, puedeVerCostos } = useAuth()
   return {
     negocioId: negocioActivo?.id,
     negocioNombre: negocioActivo?.nombre,
     userId: usuario?.id,
     usuario,
     esAdmin,
+    puedeVerCostos,
   }
 }
 
