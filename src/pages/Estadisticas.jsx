@@ -111,21 +111,25 @@ export default function Estadisticas() {
   // ── Compras ───────────────────────────────────────────────────────────────
   const cargarCompras = async () => {
     // Primero traer facturas del período para este negocio
+    // Se filtra por facturas.fecha (la fecha de la factura del proveedor), no por la de carga.
     const { data: facturasPer, error: fe } = await supabase
       .from('facturas')
-      .select('id, total')
+      .select('id, total, iva_monto, otros_cargos')
       .eq('negocio_id', negocioId)
       .eq('anulada', false)
       .gte('fecha', desde)
       .lte('fecha', hasta)
     if (fe) throw fe
 
-    if (!facturasPer || facturasPer.length === 0) {
-      setDatos({ totalComprado: 0, porIngrediente: [], items: [] })
+    const facturas = facturasPer || []
+    const totalIVA = facturas.reduce((s, f) => s + Number(f.iva_monto || 0), 0)
+
+    if (facturas.length === 0) {
+      setDatos({ totalComprado: 0, totalIVA: 0, cantFacturas: 0, porIngrediente: [], items: [] })
       return
     }
 
-    const facturaIds = facturasPer.map(f => f.id)
+    const facturaIds = facturas.map(f => f.id)
 
     // Luego traer los items de esas facturas
     const { data: items, error: ie } = await supabase
@@ -148,6 +152,8 @@ export default function Estadisticas() {
 
     setDatos({
       totalComprado,
+      totalIVA,
+      cantFacturas: facturas.length,
       porIngrediente: Object.values(mpMap).sort((a, b) => b.totalPesos - a.totalPesos),
     })
   }
@@ -253,6 +259,9 @@ export default function Estadisticas() {
         datos.deudaActual.map(d => ({ 'Proveedor': d.nombre, 'Deuda total ($)': d.deuda_total, 'Deuda vencida ($)': d.deuda_vencida }))
       ), 'Deuda Actual')
     } else if (tab === 'compras') {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([
+        { 'Período': `${desde} al ${hasta}`, 'Facturas': datos.cantFacturas, 'Total comprado neto ($)': datos.totalComprado, 'IVA ($)': datos.totalIVA, 'Total con IVA ($)': datos.totalComprado + datos.totalIVA },
+      ]), 'Resumen')
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(
         datos.porIngrediente.map(i => ({ 'Ingrediente': i.nombre, 'Total comprado': `${i.totalCantidad.toFixed(2)} ${i.unidad}`, 'Nº compras': i.compras, 'Total ($)': i.totalPesos, 'Precio promedio ($)': i.totalCantidad ? Math.round(i.totalPesos / i.totalCantidad * 100) / 100 : 0 }))
       ), 'Por Ingrediente')
@@ -349,8 +358,9 @@ export default function Estadisticas() {
 
     if (tab === 'compras') return (
       <div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 14, marginBottom: 20 }}>
-          <Stat label="Total comprado en el período" val={ARS(datos.totalComprado)} color="#B8722A" icon="cart" />
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 14, marginBottom: 20 }}>
+          <Stat label="Total comprado (neto)" val={ARS(datos.totalComprado)} color="#B8722A" icon="cart" />
+          <Stat label="IVA del período" val={ARS(datos.totalIVA)} color="#1A56DB" icon="pay" sub={`${datos.cantFacturas} factura${datos.cantFacturas === 1 ? '' : 's'}`} />
           <Stat label="Ingredientes distintos" val={datos.porIngrediente.length} color="#2D6A4F" icon="box" />
         </div>
         <Card>
