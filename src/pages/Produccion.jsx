@@ -178,7 +178,7 @@ export default function Produccion() {
   }
 
   const openAddRec = () => {
-    setRForm({ nombre: '', rendimiento: '', unidad_rendimiento: 'kg' })
+    setRForm({ nombre: '', rendimiento: '', unidad_rendimiento: 'kg', crearProducto: false, prodUnidad: '', prodStockMinimo: '', prodVidaUtil: '' })
     setIngs([{ mpId: '', mpNombre: '', cantidad: '', unidad: '' }])
     setRecetaModal('add')
   }
@@ -197,12 +197,24 @@ export default function Produccion() {
         const { data: rec, error } = await supabase.from('recetas').insert({ negocio_id: negocioId, nombre: upper(rForm.nombre), rendimiento: +rForm.rendimiento, unidad_rendimiento: rForm.unidad_rendimiento }).select().single()
         if (error) throw error
         await supabase.from('receta_ingredientes').insert(ings.map(i => ({ receta_id: rec.id, mp_id: i.mpId, mp_nombre: i.mpNombre, cantidad: +i.cantidad, unidad: i.unidad })))
+        // Alta combinada opcional: crear el producto terminado vinculado a esta receta
+        if (rForm.crearProducto) {
+          const { error: pe } = await supabase.from('productos_terminados').insert({
+            negocio_id: negocioId,
+            nombre: upper(rForm.nombre),
+            unidad: rForm.prodUnidad || rForm.unidad_rendimiento || 'kg',
+            stock_minimo: +rForm.prodStockMinimo || 0,
+            receta_id: rec.id,
+            vida_util_dias: rForm.prodVidaUtil ? parseInt(rForm.prodVidaUtil) : null,
+          })
+          if (pe) throw pe
+        }
       } else {
         await supabase.from('recetas').update({ nombre: upper(rForm.nombre), rendimiento: +rForm.rendimiento, unidad_rendimiento: rForm.unidad_rendimiento }).eq('id', recetaModal.id)
         await supabase.from('receta_ingredientes').delete().eq('receta_id', recetaModal.id)
         await supabase.from('receta_ingredientes').insert(ings.map(i => ({ receta_id: recetaModal.id, mp_id: i.mpId, mp_nombre: i.mpNombre, cantidad: +i.cantidad, unidad: i.unidad })))
       }
-      toast('Receta guardada', 'ok'); setRecetaModal(null); cargar()
+      toast(recetaModal === 'add' && rForm.crearProducto ? 'Receta y producto creados' : 'Receta guardada', 'ok'); setRecetaModal(null); cargar()
     } catch (e) {
       toast(e.message || 'Error', 'err')
     }
@@ -503,7 +515,27 @@ export default function Produccion() {
               + Agregar ingrediente
             </button>
           </div>
-          <MRow><Btn v="ghost" onClick={() => setRecetaModal(null)}>Cancelar</Btn><Btn onClick={saveRec} loading={saving}>Guardar receta</Btn></MRow>
+          {recetaModal === 'add' && (
+            <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14, marginTop: 4 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 }}>
+                <input type="checkbox" checked={!!rForm.crearProducto} onChange={e => setRForm(x => ({ ...x, crearProducto: e.target.checked }))} style={{ width: 16, height: 16, accentColor: '#2D6A4F' }} />
+                Crear también el producto terminado con esta receta
+              </label>
+              {rForm.crearProducto && (
+                <>
+                  <p style={{ fontSize: 12, color: 'var(--muted)', margin: '8px 0 10px' }}>
+                    Se creará el producto <strong>{upper(rForm.nombre) || '—'}</strong>, vinculado a esta receta. El stock, los lotes y el costo quedan asociados automáticamente. Dejalo destildado si esta receta no se vende como tal (ej. un relleno).
+                  </p>
+                  <Grid2>
+                    <FG label="Unidad del producto"><Inp value={rForm.prodUnidad} onChange={e => setRForm(x => ({ ...x, prodUnidad: e.target.value }))} placeholder={rForm.unidad_rendimiento || 'kg'} /></FG>
+                    <FG label="Stock mínimo"><Inp type="number" value={rForm.prodStockMinimo} onChange={e => setRForm(x => ({ ...x, prodStockMinimo: e.target.value }))} placeholder="0" /></FG>
+                  </Grid2>
+                  <FG label="Vida útil (días)"><Inp type="number" min="0" value={rForm.prodVidaUtil} onChange={e => setRForm(x => ({ ...x, prodVidaUtil: e.target.value }))} placeholder="Ej: 5 (vacío = no vence)" /></FG>
+                </>
+              )}
+            </div>
+          )}
+          <MRow><Btn v="ghost" onClick={() => setRecetaModal(null)}>Cancelar</Btn><Btn onClick={saveRec} loading={saving}>{recetaModal === 'add' && rForm.crearProducto ? 'Guardar receta y producto' : 'Guardar receta'}</Btn></MRow>
         </Modal>
       )}
 
