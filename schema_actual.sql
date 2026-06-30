@@ -607,10 +607,13 @@ CREATE OR REPLACE VIEW "public"."v_deuda_proveedores" AS
     "pr"."negocio_id",
     "pr"."nombre",
     COALESCE("sum"("vf"."saldo") FILTER (WHERE (NOT "vf"."anulada")), (0)::numeric) AS "deuda_total",
-    COALESCE("sum"("vf"."saldo") FILTER (WHERE ((NOT "vf"."anulada") AND ("vf"."estado" = 'vencida'::"text"))), (0)::numeric) AS "deuda_vencida"
+    COALESCE("sum"("vf"."saldo") FILTER (WHERE ((NOT "vf"."anulada") AND ("vf"."estado" = 'vencida'::"text"))), (0)::numeric) AS "deuda_vencida",
+    "pr"."cuit",
+    "pr"."telefono",
+    "pr"."email"
    FROM ("public"."proveedores" "pr"
      LEFT JOIN "public"."v_facturas_estado" "vf" ON (("vf"."proveedor_id" = "pr"."id")))
-  GROUP BY "pr"."id", "pr"."negocio_id", "pr"."nombre";
+  GROUP BY "pr"."id", "pr"."negocio_id", "pr"."nombre", "pr"."cuit", "pr"."telefono", "pr"."email";
 
 
 ALTER VIEW "public"."v_deuda_proveedores" OWNER TO "postgres";
