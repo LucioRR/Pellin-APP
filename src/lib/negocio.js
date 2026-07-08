@@ -299,6 +299,18 @@ export const acciones = {
       .eq('id', loteId)
       .single()
 
+    // FIX: no permitir anular un lote que ya tiene salidas (remitos/bajas) activas.
+    // Anularlo dejaría el stock de PT negativo y la trazabilidad rota.
+    const { data: salidasLote } = await supabase
+      .from('salidas_produccion')
+      .select('id')
+      .eq('lote_id', loteId)
+      .eq('anulada', false)
+      .limit(1)
+    if (salidasLote && salidasLote.length > 0) {
+      throw new Error('Este lote ya tiene salidas asociadas (remitos o bajas). Anulá primero esas salidas antes de anular el lote.')
+    }
+
     const { error } = await supabase.from('lotes').update({
       anulado: true,
       anulado_por: userId,
@@ -913,7 +925,7 @@ export async function createOrden(negocioId, userId, datos) {
       numero_orden: nuevoNumero,
       prioridad: cabecera.prioridad || 'normal',
       fecha_planificada: cabecera.fecha_planificada,
-      turno: cabecera.turno || 'manana',
+      turno: cabecera.turno || 'mañana',
       notas: cabecera.notas || null,
       pedido_id: cabecera.pedido_id || null,
     })
@@ -985,11 +997,15 @@ export async function completarOrden(negocioId, userId, orden, cantidades, fecha
     // Obtener receta_id desde productos_terminados (la FK está en esa tabla)
     const { data: pt, error: errPT } = await supabase
       .from('productos_terminados')
-      .select('receta_id, vida_util_dias')
+      .select('nombre, receta_id, vida_util_dias')
       .eq('id', c.producto_id)
       .single()
 
-    if (errPT || !pt?.receta_id) continue
+    // FIX: antes un producto sin receta se salteaba en silencio y la orden
+    // quedaba "completada" sin crear lote ni descontar MP. Ahora se avisa.
+    if (errPT || !pt?.receta_id) {
+      throw new Error(`El producto "${pt?.nombre || c.producto_id}" no tiene receta vinculada. Vinculá una receta en Productos Terminados antes de completar la orden.`)
+    }
 
     const { data: recetas, error: errR } = await supabase
       .from('recetas')

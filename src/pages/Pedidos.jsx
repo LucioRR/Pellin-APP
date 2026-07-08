@@ -501,11 +501,13 @@ export default function Pedidos() {
   async function abrirDetalle(pedido) {
     setOrdenAsociada(null)
     setPedidoDetalle(pedido)
+    // FIX: la tabla ordenes_produccion no tiene columna 'anulada' — el filtro
+    // anterior hacía fallar la query en silencio y nunca se detectaba la O.P.
     const { data } = await supabase
       .from('ordenes_produccion')
       .select('id, estado, fecha_planificada')
       .eq('pedido_id', pedido.id)
-      .eq('anulada', false)
+      .neq('estado', 'cancelada')
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle()

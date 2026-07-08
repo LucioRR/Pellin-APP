@@ -23,13 +23,82 @@ COMMENT ON SCHEMA "public" IS 'standard public schema';
 
 
 
+-- NOTA: todas las funciones tienen SET search_path = 'public' (hardening jul-2026).
+
 CREATE OR REPLACE FUNCTION "public"."descontar_stock_mp"("p_mp_id" "uuid", "p_cantidad" numeric) RETURNS "void"
     LANGUAGE "plpgsql"
+    SET search_path = 'public'
     AS $$
 BEGIN
   UPDATE materias_primas
   SET stock_actual = stock_actual - p_cantidad
   WHERE id = p_mp_id;
+END;
+$$;
+
+
+-- Guardia anti-escalación: un usuario autenticado no-admin no puede modificar
+-- rol/modulos/negocio_ids/activo/email (ni propios ni ajenos). Con auth.uid()
+-- NULL (mantenimiento por SQL directo) no interfiere.
+CREATE OR REPLACE FUNCTION "public"."proteger_campos_usuario"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET search_path = 'public'
+    AS $$
+BEGIN
+  IF auth.uid() IS NOT NULL AND NOT COALESCE(public.es_admin(), false) THEN
+    IF NEW.rol         IS DISTINCT FROM OLD.rol
+    OR NEW.modulos     IS DISTINCT FROM OLD.modulos
+    OR NEW.negocio_ids IS DISTINCT FROM OLD.negocio_ids
+    OR NEW.activo      IS DISTINCT FROM OLD.activo
+    OR NEW.email       IS DISTINCT FROM OLD.email THEN
+      RAISE EXCEPTION 'No autorizado a modificar rol, permisos o negocios';
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+
+-- Permisos por módulo (creadas por migracion_permisos_modulos.sql)
+CREATE OR REPLACE FUNCTION "public"."tiene_modulo"("p_modulo" "text") RETURNS boolean
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET search_path = 'public'
+    AS $$
+  SELECT COALESCE(
+    (SELECT rol = 'admin' OR p_modulo = ANY(modulos) FROM public.usuarios WHERE id = auth.uid()),
+    false)
+$$;
+
+
+CREATE OR REPLACE FUNCTION "public"."tiene_alguno"("p_modulos" "text"[]) RETURNS boolean
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET search_path = 'public'
+    AS $$
+  SELECT COALESCE(
+    (SELECT rol = 'admin' OR modulos && p_modulos FROM public.usuarios WHERE id = auth.uid()),
+    false)
+$$;
+
+
+-- Reclamo de invitación al primer login (crea el usuario desde la invitación)
+CREATE OR REPLACE FUNCTION "public"."reclamar_invitacion"("p_nombre" "text", "p_avatar_url" "text" DEFAULT NULL) RETURNS json
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET search_path = 'public'
+    AS $$
+DECLARE
+  v_user_id UUID; v_email TEXT; v_inv invitaciones%ROWTYPE; v_nuevo usuarios%ROWTYPE;
+BEGIN
+  v_user_id := auth.uid();
+  v_email   := auth.email();
+  IF v_user_id IS NULL THEN RETURN json_build_object('ok', false, 'error', 'not_authenticated'); END IF;
+  IF EXISTS (SELECT 1 FROM usuarios WHERE id = v_user_id) THEN RETURN json_build_object('ok', true, 'existing', true); END IF;
+  SELECT * INTO v_inv FROM invitaciones WHERE email = v_email LIMIT 1;
+  IF NOT FOUND THEN RETURN json_build_object('ok', false, 'error', 'no_invitation'); END IF;
+  INSERT INTO usuarios (id, nombre, email, avatar_url, rol, modulos, negocio_ids, activo)
+  VALUES (v_user_id, p_nombre, v_email, p_avatar_url, v_inv.rol, v_inv.modulos, v_inv.negocio_ids, true)
+  RETURNING * INTO v_nuevo;
+  DELETE FROM invitaciones WHERE id = v_inv.id;
+  RETURN json_build_object('ok', true, 'usuario', row_to_json(v_nuevo));
 END;
 $$;
 
@@ -336,7 +405,7 @@ CREATE TABLE IF NOT EXISTS "public"."ordenes_produccion" (
     "numero_orden" integer,
     "prioridad" "text" DEFAULT 'normal'::"text",
     CONSTRAINT "ordenes_produccion_estado_check" CHECK (("estado" = ANY (ARRAY['planificada'::"text", 'en_proceso'::"text", 'completada'::"text", 'cancelada'::"text"]))),
-    CONSTRAINT "ordenes_produccion_turno_check" CHECK (("turno" = ANY (ARRAY['mañana'::"text", 'tarde'::"text"])))
+    CONSTRAINT "ordenes_produccion_turno_check" CHECK (("turno" = ANY (ARRAY['mañana'::"text", 'tarde'::"text", 'noche'::"text"])))
 );
 
 
@@ -581,7 +650,8 @@ CREATE TABLE IF NOT EXISTS "public"."usuarios" (
 ALTER TABLE "public"."usuarios" OWNER TO "postgres";
 
 
-CREATE OR REPLACE VIEW "public"."v_facturas_estado" AS
+-- NOTA: ambas vistas tienen security_invoker = true (aplican la RLS del consultante).
+CREATE OR REPLACE VIEW "public"."v_facturas_estado" WITH ("security_invoker"='true') AS
 SELECT
     NULL::"uuid" AS "id",
     NULL::"uuid" AS "negocio_id",
@@ -602,7 +672,7 @@ SELECT
 ALTER VIEW "public"."v_facturas_estado" OWNER TO "postgres";
 
 
-CREATE OR REPLACE VIEW "public"."v_deuda_proveedores" AS
+CREATE OR REPLACE VIEW "public"."v_deuda_proveedores" WITH ("security_invoker"='true') AS
  SELECT "pr"."id" AS "proveedor_id",
     "pr"."negocio_id",
     "pr"."nombre",
@@ -755,6 +825,38 @@ ALTER TABLE ONLY "public"."usuarios"
 
 
 CREATE INDEX "idx_ajustes_stock_mp" ON "public"."ajustes_stock" USING "btree" ("mp_id", "creado_en" DESC);
+
+
+
+-- Índices de FKs consultadas (hardening jul-2026, performance advisor)
+CREATE INDEX "idx_caja_negocio_fecha" ON "public"."caja" USING "btree" ("negocio_id", "fecha");
+CREATE INDEX "idx_facturas_negocio_fecha" ON "public"."facturas" USING "btree" ("negocio_id", "fecha");
+CREATE INDEX "idx_facturas_proveedor" ON "public"."facturas" USING "btree" ("proveedor_id");
+CREATE INDEX "idx_factura_items_factura" ON "public"."factura_items" USING "btree" ("factura_id");
+CREATE INDEX "idx_factura_items_mp" ON "public"."factura_items" USING "btree" ("mp_id");
+CREATE INDEX "idx_historial_precios_mp" ON "public"."historial_precios" USING "btree" ("mp_id");
+CREATE INDEX "idx_pagos_factura" ON "public"."pagos" USING "btree" ("factura_id");
+CREATE INDEX "idx_pagos_proveedor" ON "public"."pagos" USING "btree" ("proveedor_id");
+CREATE INDEX "idx_pagos_negocio" ON "public"."pagos" USING "btree" ("negocio_id");
+CREATE INDEX "idx_lotes_negocio_fecha" ON "public"."lotes" USING "btree" ("negocio_id", "fecha");
+CREATE INDEX "idx_lotes_producto" ON "public"."lotes" USING "btree" ("producto_id");
+CREATE INDEX "idx_lotes_receta" ON "public"."lotes" USING "btree" ("receta_id");
+CREATE INDEX "idx_lotes_orden" ON "public"."lotes" USING "btree" ("orden_id");
+CREATE INDEX "idx_mp_negocio" ON "public"."materias_primas" USING "btree" ("negocio_id");
+CREATE INDEX "idx_pt_negocio" ON "public"."productos_terminados" USING "btree" ("negocio_id");
+CREATE INDEX "idx_pt_receta" ON "public"."productos_terminados" USING "btree" ("receta_id");
+CREATE INDEX "idx_proveedores_negocio" ON "public"."proveedores" USING "btree" ("negocio_id");
+CREATE INDEX "idx_recetas_negocio" ON "public"."recetas" USING "btree" ("negocio_id");
+CREATE INDEX "idx_receta_ing_receta" ON "public"."receta_ingredientes" USING "btree" ("receta_id");
+CREATE INDEX "idx_receta_ing_mp" ON "public"."receta_ingredientes" USING "btree" ("mp_id");
+CREATE INDEX "idx_remitos_negocio" ON "public"."remitos" USING "btree" ("negocio_id");
+CREATE INDEX "idx_remito_items_remito" ON "public"."remito_items" USING "btree" ("remito_id");
+CREATE INDEX "idx_sp_negocio_fecha" ON "public"."salidas_produccion" USING "btree" ("negocio_id", "fecha");
+CREATE INDEX "idx_sp_remito" ON "public"."salidas_produccion" USING "btree" ("remito_id");
+CREATE INDEX "idx_sp_lote" ON "public"."salidas_produccion" USING "btree" ("lote_id");
+CREATE INDEX "idx_sp_producto" ON "public"."salidas_produccion" USING "btree" ("producto_id");
+CREATE INDEX "idx_pedidos_remito" ON "public"."pedidos" USING "btree" ("remito_id");
+CREATE INDEX "idx_ajustes_stock_negocio" ON "public"."ajustes_stock" USING "btree" ("negocio_id");
 
 
 
@@ -1168,11 +1270,11 @@ CREATE POLICY "inv_admin" ON "public"."invitaciones" TO "authenticated" USING ((
 
 
 
-CREATE POLICY "inv_self_select" ON "public"."invitaciones" FOR SELECT TO "authenticated" USING (("email" = "auth"."email"()));
+CREATE POLICY "inv_self_select" ON "public"."invitaciones" FOR SELECT TO "authenticated" USING (("email" = ( SELECT "auth"."email"() AS "email")));
 
 
 
-CREATE POLICY "inv_self_delete" ON "public"."invitaciones" FOR DELETE TO "authenticated" USING (("email" = "auth"."email"()));
+CREATE POLICY "inv_self_delete" ON "public"."invitaciones" FOR DELETE TO "authenticated" USING (("email" = ( SELECT "auth"."email"() AS "email")));
 
 
 
@@ -1376,7 +1478,7 @@ CREATE POLICY "Select salidas_produccion" ON "public"."salidas_produccion" FOR S
 
 
 
-CREATE POLICY "Update caja" ON "public"."caja" FOR UPDATE USING (("negocio_id" = ANY ("public"."mis_negocios"())));
+CREATE POLICY "Update caja" ON "public"."caja" FOR UPDATE USING ((("negocio_id" = ANY ("public"."mis_negocios"())) AND "public"."es_admin"()));
 
 
 
@@ -1384,11 +1486,11 @@ CREATE POLICY "Update categorias_caja" ON "public"."categorias_caja" FOR UPDATE 
 
 
 
-CREATE POLICY "Update facturas" ON "public"."facturas" FOR UPDATE USING (("negocio_id" = ANY ("public"."mis_negocios"())));
+CREATE POLICY "Update facturas" ON "public"."facturas" FOR UPDATE USING ((("negocio_id" = ANY ("public"."mis_negocios"())) AND "public"."es_admin"()));
 
 
 
-CREATE POLICY "Update lotes" ON "public"."lotes" FOR UPDATE USING (("negocio_id" = ANY ("public"."mis_negocios"())));
+CREATE POLICY "Update lotes" ON "public"."lotes" FOR UPDATE USING ((("negocio_id" = ANY ("public"."mis_negocios"())) AND "public"."es_admin"()));
 
 
 
@@ -1406,7 +1508,7 @@ CREATE POLICY "Update ordenes_produccion_items" ON "public"."ordenes_produccion_
 
 
 
-CREATE POLICY "Update pagos" ON "public"."pagos" FOR UPDATE USING (("negocio_id" = ANY ("public"."mis_negocios"())));
+CREATE POLICY "Update pagos" ON "public"."pagos" FOR UPDATE USING ((("negocio_id" = ANY ("public"."mis_negocios"())) AND "public"."es_admin"()));
 
 
 
@@ -1436,15 +1538,20 @@ CREATE POLICY "Update remito_secuencia" ON "public"."remito_secuencia" FOR UPDAT
 
 
 
-CREATE POLICY "Update remitos" ON "public"."remitos" FOR UPDATE USING (("negocio_id" = ANY ("public"."mis_negocios"())));
+CREATE POLICY "Update remitos" ON "public"."remitos" FOR UPDATE USING ((("negocio_id" = ANY ("public"."mis_negocios"())) AND "public"."es_admin"()));
 
 
 
-CREATE POLICY "Update salidas_produccion" ON "public"."salidas_produccion" FOR UPDATE USING (("negocio_id" = ANY ("public"."mis_negocios"())));
+CREATE POLICY "Update salidas_produccion" ON "public"."salidas_produccion" FOR UPDATE USING ((("negocio_id" = ANY ("public"."mis_negocios"())) AND "public"."es_admin"()));
 
 
 
-CREATE POLICY "Usuario actualiza propio" ON "public"."usuarios" FOR UPDATE USING (("id" = "auth"."uid"()));
+-- El trigger trg_proteger_campos_usuario impide que un no-admin cambie
+-- rol/modulos/negocio_ids/activo/email aunque esta policy permita el UPDATE.
+CREATE POLICY "Usuario actualiza propio" ON "public"."usuarios" FOR UPDATE USING (("id" = ( SELECT "auth"."uid"() AS "uid")));
+
+
+CREATE TRIGGER "trg_proteger_campos_usuario" BEFORE UPDATE ON "public"."usuarios" FOR EACH ROW EXECUTE FUNCTION "public"."proteger_campos_usuario"();
 
 
 
@@ -1452,7 +1559,7 @@ CREATE POLICY "Ver negocios propios" ON "public"."negocios" FOR SELECT USING (("
 
 
 
-CREATE POLICY "Ver propio usuario" ON "public"."usuarios" FOR SELECT USING ((("id" = "auth"."uid"()) OR "public"."es_admin"()));
+CREATE POLICY "Ver propio usuario" ON "public"."usuarios" FOR SELECT USING ((("id" = ( SELECT "auth"."uid"() AS "uid")) OR "public"."es_admin"()));
 
 
 
@@ -1647,7 +1754,7 @@ ALTER TABLE "public"."salidas_produccion" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."usuarios" ENABLE ROW LEVEL SECURITY;
 
 
-CREATE POLICY "usuarios_select_own" ON "public"."usuarios" FOR SELECT TO "authenticated" USING (("id" = "auth"."uid"()));
+-- (policy "usuarios_select_own" eliminada: era redundante con "Ver propio usuario")
 
 
 

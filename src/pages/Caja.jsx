@@ -54,6 +54,7 @@ export default function Caja() {
 
   const save = async () => {
     if (!form.monto || !form.descripcion || !form.categoriaId) return
+    if (+form.monto <= 0) { toast('El monto debe ser mayor a cero', 'err'); return }
     setSaving(true)
     const cat = categorias.find(c => c.id === form.categoriaId)
     const { error } = await supabase.from('caja').insert({
